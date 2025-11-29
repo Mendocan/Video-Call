@@ -1,0 +1,66 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Video Call</string>
+    <string name="widget_description">Video Call uygulaması için hızlı erişim widget\'ı</string>
+    
+    <!-- Genel -->
+    <string name="ok">Tamam</string>
+    <string name="cancel">İptal</string>
+    <string name="save">Kaydet</string>
+    <string name="delete">Sil</string>
+    <string name="edit">Düzenle</string>
+    <string name="close">Kapat</string>
+    <string name="search">Ara</string>
+    <string name="settings">Ayarlar</string>
+    <string name="home">Ana Sayfa</string>
+    <string name="contacts">Kişiler</string>
+    <string name="call">Arama</string>
+    
+    <!-- Widget -->
+    <string name="widget_ready">Hazır</string>
+    <string name="widget_active">Aktif</string>
+    <string name="widget_subscription_required">Abonelik Gerekli</string>
+    <string name="widget_call_button">Ara</string>
+    <string name="widget_contacts_button">Kişiler</string>
+    
+    <!-- Ayarlar -->
+    <string name="settings_title">Ayarlar</string>
+    <string name="settings_language">Dil</string>
+    <string name="settings_language_description">Uygulama dilini seçin</string>
+    <string name="language_turkish">Türkçe</string>
+    <string name="language_english">English</string>
+    
+    <!-- Uygulama Bilgileri -->
+    <string name="app_info">Uygulama Bilgileri</string>
+    <string name="app_version">Video Call v2.0.0</string>
+    <string name="app_description">Görüntülü görüşme uygulaması</string>
+    
+    <!-- Görüşme İstatistikleri -->
+    <string name="call_statistics">Görüşme İstatistikleri</string>
+    
+    <!-- 2FA -->
+    <string name="two_factor_auth_title">İki Faktörlü Doğrulama (2FA)</string>
+    <string name="two_factor_auth_enable">2FA\'yı Etkinleştir</string>
+    <string name="two_factor_auth_description">Hesabınızı ekstra güvenlik katmanı ile koruyun</string>
+    <string name="two_factor_auth_scan_qr">QR Kodu Tarayın</string>
+    <string name="two_factor_auth_scan_qr_description">Google Authenticator veya benzeri bir uygulama ile QR kodu tarayın</string>
+    <string name="two_factor_auth_qr_generating">QR kod oluşturuluyor...</string>
+    
+    <!-- Durum Mesajları -->
+    <string name="status_online">Çevrimiçi</string>
+    <string name="status_busy">Meşgul</string>
+    <string name="status_dnd">Rahatsız Etmeyin</string>
+    <string name="status_invisible">Görünmez</string>
+    
+    <!-- Görüşme -->
+    <string name="call_connecting">Bağlanıyor...</string>
+    <string name="call_connected">Bağlandı</string>
+    <string name="call_ended">Görüşme sonlandırıldı</string>
+    <string name="call_starting">Arama başlatılıyor...</string>
+    <string name="call_offer_sent">Teklif gönderildi, yanıt bekleniyor...</string>
+    
+    <!-- Hata Mesajları -->
+    <string name="error_network_required">İnternet bağlantısı gerekli</string>
+    <string name="error_call_failed">Arama başlatılamadı</string>
+</resources>
+

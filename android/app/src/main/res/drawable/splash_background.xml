@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Beyaz arka plan -->
+    <item android:drawable="@color/ic_launcher_background"/>
+    
+    <!-- Logo ortada (assets'ten yüklenecek) -->
+    <!-- Not: Logo dosyası assets/public/logo.png olarak mevcut -->
+    <!-- Splash screen için basit beyaz arka plan kullanıyoruz -->
+</layer-list>
+

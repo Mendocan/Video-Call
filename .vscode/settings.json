@@ -1,0 +1,36 @@
+{
+  "java.configuration.updateBuildConfiguration": "automatic",
+  "java.import.gradle.enabled": true,
+  "java.import.gradle.wrapper.enabled": true,
+  "java.import.exclusions": [
+    "**/node_modules/**",
+    "**/frontend/android/capacitor-cordova-android-plugins/**",
+    "**/frontend/node_modules/@capacitor/android/**"
+  ],
+  "java.project.sourcePaths": [
+    "frontend/android/app/src/main/kotlin"
+  ],
+  "java.project.outputPath": "frontend/android/app/build/intermediates/javac",
+  "java.project.referencedLibraries": [
+    "frontend/android/app/build/intermediates/**/*.jar",
+    "frontend/android/app/libs/**/*.jar"
+  ],
+  "files.exclude": {
+    "**/.gradle": true,
+    "**/build": true,
+    "**/.idea": false
+  },
+  "files.associations": {
+    "**/build/**/*.html": "plaintext",
+    "**/build/reports/**": "plaintext"
+  },
+  "files.watcherExclude": {
+    "**/build/**": true,
+    "**/build/reports/**": true
+  },
+  "java.compile.nullAnalysis.mode": "automatic",
+  "java.errors.incompleteClasspath.severity": "ignore",
+  "[java]": {
+    "editor.semanticHighlighting.enabled": false
+  }
+}

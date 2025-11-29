@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="8dp"
+    android:background="@android:color/transparent">
+
+    <!-- Widget Header -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingBottom="8dp">
+
+        <ImageView
+            android:id="@+id/widget_logo"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:src="@mipmap/ic_launcher"
+            android:contentDescription="Video Call Logo" />
+
+        <TextView
+            android:id="@+id/widget_title"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginStart="8dp"
+            android:text="Video Call"
+            android:textColor="#FFFFFF"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <!-- Status Display -->
+    <TextView
+        android:id="@+id/widget_status"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Hazır"
+        android:textColor="#00B8D4"
+        android:textSize="12sp"
+        android:gravity="center"
+        android:paddingVertical="4dp" />
+
+    <!-- Quick Actions -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center"
+        android:paddingTop="8dp">
+
+        <Button
+            android:id="@+id/widget_call_button"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginEnd="4dp"
+            android:text="Ara"
+            android:textSize="12sp"
+            android:backgroundTint="#00B8D4"
+            android:textColor="#FFFFFF"
+            style="@android:style/Widget.Material.Button" />
+
+        <Button
+            android:id="@+id/widget_contacts_button"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginStart="4dp"
+            android:text="Kişiler"
+            android:textSize="12sp"
+            android:backgroundTint="#00B8D4"
+            android:textColor="#FFFFFF"
+            style="@android:style/Widget.Material.Button" />
+    </LinearLayout>
+
+    <!-- Last Call Info (Optional) -->
+    <TextView
+        android:id="@+id/widget_last_call"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text=""
+        android:textColor="#CCCCCC"
+        android:textSize="10sp"
+        android:gravity="center"
+        android:paddingTop="4dp"
+        android:visibility="gone" />
+
+</LinearLayout>
+
