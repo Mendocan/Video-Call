@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket Test - Video Call Signaling Server</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #00BCD4;
+        }
+        .status {
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 5px;
+            font-weight: bold;
+        }
+        .success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+        button {
+            background: #00BCD4;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 5px;
+        }
+        button:hover {
+            background: #0097A7;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        #log {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            padding: 15px;
+            border-radius: 5px;
+            max-height: 400px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+            margin-top: 20px;
+        }
+        .log-entry {
+            margin: 5px 0;
+            padding: 5px;
+        }
+        .log-success { color: #28a745; }
+        .log-error { color: #dc3545; }
+        .log-info { color: #17a2b8; }
+        .log-warning { color: #ffc107; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔌 WebSocket Test - Signaling Server</h1>
+        
+        <div id="status" class="status info">
+            ⏳ Bağlantı bekleniyor...
+        </div>
+
+        <div>
+            <button id="connectBtn" onclick="connect()">Bağlan</button>
+            <button id="disconnectBtn" onclick="disconnect()" disabled>Bağlantıyı Kes</button>
+            <button id="registerBtn" onclick="register()" disabled>Kayıt Ol (Register)</button>
+            <button id="clearBtn" onclick="clearLog()">Logları Temizle</button>
+        </div>
+
+        <div style="margin-top: 20px;">
+            <label>
+                <strong>WebSocket URL:</strong><br>
+                <input type="text" id="wsUrl" value="wss://video-call-dyx9.onrender.com/ws" 
+                       style="width: 100%; padding: 8px; margin-top: 5px; border: 1px solid #ddd; border-radius: 5px;">
+            </label>
+        </div>
+
+        <div style="margin-top: 20px;">
+            <label>
+                <strong>Telefon Numarası:</strong><br>
+                <input type="text" id="phoneNumber" value="05351234567" 
+                       style="width: 100%; padding: 8px; margin-top: 5px; border: 1px solid #ddd; border-radius: 5px;">
+            </label>
+        </div>
+
+        <div style="margin-top: 20px;">
+            <label>
+                <strong>İsim:</strong><br>
+                <input type="text" id="name" value="Test Kullanıcı" 
+                       style="width: 100%; padding: 8px; margin-top: 5px; border: 1px solid #ddd; border-radius: 5px;">
+            </label>
+        </div>
+
+        <div id="log"></div>
+    </div>
+
+    <script>
+        let ws = null;
+        let startTime = null;
+
+        function log(message, type = 'info') {
+            const logDiv = document.getElementById('log');
+            const entry = document.createElement('div');
+            entry.className = `log-entry log-${type}`;
+            const timestamp = new Date().toLocaleTimeString('tr-TR');
+            entry.textContent = `[${timestamp}] ${message}`;
+            logDiv.appendChild(entry);
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        function updateStatus(message, type = 'info') {
+            const statusDiv = document.getElementById('status');
+            statusDiv.className = `status ${type}`;
+            statusDiv.textContent = message;
+        }
+
+        function connect() {
+            const url = document.getElementById('wsUrl').value;
+            log(`WebSocket bağlantısı başlatılıyor: ${url}`, 'info');
+            updateStatus('⏳ Bağlanıyor...', 'info');
+            startTime = Date.now();
+
+            try {
+                ws = new WebSocket(url);
+
+                ws.onopen = () => {
+                    const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
+                    log(`✅ WebSocket bağlantısı başarılı! (${elapsed} saniye)`, 'success');
+                    updateStatus(`✅ Bağlandı (${elapsed} saniye)`, 'success');
+                    document.getElementById('connectBtn').disabled = true;
+                    document.getElementById('disconnectBtn').disabled = false;
+                    document.getElementById('registerBtn').disabled = false;
+                };
+
+                ws.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        log(`📨 Mesaj alındı: ${JSON.stringify(data, null, 2)}`, 'info');
+                        
+                        if (data.type === 'registered') {
+                            log(`✅ Kayıt başarılı! Phone: ${data.phoneNumber}`, 'success');
+                            updateStatus(`✅ Kayıtlı: ${data.phoneNumber}`, 'success');
+                        } else if (data.type === 'error') {
+                            log(`❌ Hata: ${data.message}`, 'error');
+                        }
+                    } catch (e) {
+                        log(`📨 Mesaj (parse edilemedi): ${event.data}`, 'warning');
+                    }
+                };
+
+                ws.onerror = (error) => {
+                    log(`❌ WebSocket hatası: ${error}`, 'error');
+                    updateStatus('❌ Bağlantı hatası', 'error');
+                };
+
+                ws.onclose = (event) => {
+                    const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
+                    log(`🔌 Bağlantı kapandı. Code: ${event.code}, Reason: ${event.reason || 'N/A'} (${elapsed} saniye)`, 'warning');
+                    updateStatus('🔌 Bağlantı kapandı', 'info');
+                    document.getElementById('connectBtn').disabled = false;
+                    document.getElementById('disconnectBtn').disabled = true;
+                    document.getElementById('registerBtn').disabled = true;
+                    ws = null;
+                };
+
+            } catch (error) {
+                log(`❌ Bağlantı hatası: ${error.message}`, 'error');
+                updateStatus('❌ Bağlantı hatası', 'error');
+            }
+        }
+
+        function disconnect() {
+            if (ws) {
+                ws.close();
+                log('🔌 Bağlantı kapatılıyor...', 'info');
+            }
+        }
+
+        function register() {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                log('❌ WebSocket bağlantısı açık değil!', 'error');
+                return;
+            }
+
+            const phoneNumber = document.getElementById('phoneNumber').value;
+            const name = document.getElementById('name').value;
+
+            if (!phoneNumber) {
+                log('❌ Telefon numarası gerekli!', 'error');
+                return;
+            }
+
+            const message = {
+                type: 'register',
+                phoneNumber: phoneNumber,
+                name: name || null
+            };
+
+            try {
+                ws.send(JSON.stringify(message));
+                log(`📤 Register mesajı gönderildi: ${JSON.stringify(message)}`, 'info');
+            } catch (error) {
+                log(`❌ Mesaj gönderme hatası: ${error.message}`, 'error');
+            }
+        }
+
+        function clearLog() {
+            document.getElementById('log').innerHTML = '';
+        }
+
+        // Sayfa yüklendiğinde bilgi göster
+        window.onload = () => {
+            log('ℹ️ WebSocket test sayfası hazır', 'info');
+            log('ℹ️ "Bağlan" butonuna tıklayarak test başlatabilirsiniz', 'info');
+        };
+    </script>
+</body>
+</html>
+
