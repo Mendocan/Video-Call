@@ -58,6 +58,122 @@ const blockedUsers = new Map();
 
 // HTTP server oluştur (WebSocket upgrade için)
 const server = createServer((req, res) => {
+  // Ana sayfa (root)
+  if (req.url === '/' || req.url === '') {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(`
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Call Signaling Server</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            min-height: 100vh;
+        }
+        .container {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            padding: 40px;
+            border-radius: 20px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+        }
+        h1 {
+            margin: 0 0 10px 0;
+            font-size: 2.5em;
+        }
+        .status {
+            display: inline-block;
+            background: #4CAF50;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            margin-bottom: 30px;
+        }
+        .endpoint {
+            background: rgba(255, 255, 255, 0.2);
+            padding: 15px;
+            border-radius: 10px;
+            margin: 15px 0;
+            border-left: 4px solid #00BCD4;
+        }
+        .endpoint code {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 5px 10px;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+            display: block;
+            margin: 10px 0;
+            word-break: break-all;
+        }
+        .feature {
+            display: inline-block;
+            background: rgba(255, 255, 255, 0.2);
+            padding: 8px 15px;
+            border-radius: 20px;
+            margin: 5px;
+            font-size: 0.9em;
+        }
+        a {
+            color: #00BCD4;
+            text-decoration: none;
+        }
+        a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 Video Call Signaling Server</h1>
+        <div class="status">✅ Online</div>
+        
+        <h2>📡 Endpoints</h2>
+        
+        <div class="endpoint">
+            <strong>Health Check (JSON)</strong>
+            <code>GET /health</code>
+            <a href="/health" target="_blank">Test Et →</a>
+        </div>
+        
+        <div class="endpoint">
+            <strong>WebSocket Connection</strong>
+            <code>wss://video-call-dyx9.onrender.com/ws</code>
+            <p>Android uygulaması bu URL'yi kullanır.</p>
+        </div>
+        
+        <h2>✨ Özellikler</h2>
+        <div>
+            <span class="feature">✅ Kullanıcı Kaydı</span>
+            <span class="feature">✅ Grup Yönetimi</span>
+            <span class="feature">✅ Bireysel Arama</span>
+            <span class="feature">✅ Grup Araması</span>
+            <span class="feature">✅ Wi-Fi Desteği</span>
+            <span class="feature">✅ Mobil Veri</span>
+            <span class="feature">✅ Chat</span>
+            <span class="feature">✅ Dosya Paylaşımı</span>
+        </div>
+        
+        <h2>📊 Server Durumu</h2>
+        <p>Detaylı bilgi için: <a href="/health" target="_blank">/health</a></p>
+        
+        <p style="margin-top: 40px; opacity: 0.8; font-size: 0.9em;">
+            Video Call - Private, Secure, Decentralized
+        </p>
+    </div>
+</body>
+</html>
+    `);
+    return;
+  }
+
   // Health check endpoint
   if (req.url === '/health') {
     let totalParticipants = 0;
