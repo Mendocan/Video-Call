@@ -40,7 +40,6 @@ import android.net.Uri
 import android.content.ContentResolver
 import android.content.Intent
 import java.io.File
-import java.io.FileInputStream
 import java.io.FileOutputStream
 import android.util.Base64
 import com.videocall.app.rtc.RtcClient
@@ -71,15 +70,16 @@ import java.util.concurrent.atomic.AtomicReference
 
 class VideoCallViewModel(
     private val rtcClient: RtcClient,
-    signalingClient: SignalingClient, // Mutable yapacağız
+    initialSignalingClient: SignalingClient, // Mutable yapacağız
     private val contentResolver: ContentResolver,
     private val preferencesManager: PreferencesManager,
     private val networkManager: NetworkManager,
+    @Suppress("StaticFieldLeak")
     private val context: Context
 ) : ViewModel() {
     
     // SignalingClient'ı mutable yap (backend'den IP alındıktan sonra güncellenecek)
-    private var signalingClient: SignalingClient = signalingClient
+    private var signalingClient: SignalingClient = initialSignalingClient
 
     private val _uiState = MutableStateFlow(CallUiState())
     val uiState: StateFlow<CallUiState> = _uiState.asStateFlow()
@@ -1427,7 +1427,7 @@ class VideoCallViewModel(
         rtcClient.switchCamera()
     }
     
-    fun toggleScreenSharing(resultCode: Int? = null, data: android.content.Intent? = null) {
+    fun toggleScreenSharing(resultCode: Int? = null, data: Intent? = null) {
         if (rtcClient.isScreenSharing()) {
             rtcClient.stopScreenCapture()
             _uiState.update { it.copy(isScreenSharing = false) }
@@ -1441,7 +1441,7 @@ class VideoCallViewModel(
         }
     }
     
-    fun startScreenSharing(resultCode: Int, data: android.content.Intent) {
+    fun startScreenSharing(resultCode: Int, data: Intent) {
         rtcClient.startScreenCapture(resultCode, data)
         _uiState.update { it.copy(isScreenSharing = true) }
     }
@@ -1634,7 +1634,7 @@ class VideoCallViewModel(
         preferencesManager.save2FASecret(secretKey)
         
         // Backup kodları oluştur (10 adet)
-        val backupCodes = generateBackupCodes(10)
+        val backupCodes = generateBackupCodes()
         preferencesManager.save2FABackupCodes(backupCodes)
         
         // 2FA'yı aktif et
@@ -1694,7 +1694,7 @@ class VideoCallViewModel(
     }
     
     fun regenerateBackupCodes(): List<String> {
-        val newCodes = generateBackupCodes(10)
+        val newCodes = generateBackupCodes()
         preferencesManager.save2FABackupCodes(newCodes)
         return newCodes
     }
@@ -1807,11 +1807,11 @@ class VideoCallViewModel(
         }
     }
     
-    private fun generateBackupCodes(count: Int): List<String> {
+    private fun generateBackupCodes(): List<String> {
         val codes = mutableListOf<String>()
         val random = java.security.SecureRandom()
         
-        repeat(count) {
+        repeat(10) {
             val code = StringBuilder()
             repeat(8) {
                 code.append(random.nextInt(10))
@@ -1896,7 +1896,7 @@ class VideoCallViewModel(
                 try {
                     val base64Data = qrData.removePrefix("CONTACTS:")
                     val jsonString = String(
-                        android.util.Base64.decode(base64Data, android.util.Base64.NO_WRAP),
+                        Base64.decode(base64Data, Base64.NO_WRAP),
                         Charsets.UTF_8
                     )
                     val importedContacts = parseContactsFromJson(jsonString)
@@ -2033,9 +2033,14 @@ class VideoCallViewModel(
                                     errorMessage.contains("timeout", ignoreCase = true)
                             
                             if (isNetworkError) {
+                                val timeoutMessage = if (errorMessage.contains("timeout", ignoreCase = true)) {
+                                    "Sunucuya bağlanılamadı: Read timed out. Sunucu uyku modunda olabilir, lütfen tekrar deneyin."
+                                } else {
+                                    "Sunucuya bağlanılamadı. İnternet bağlantınızı kontrol edin."
+                                }
                                 _uiState.update { 
                                     it.copy(
-                                        statusMessage = "Sunucuya bağlanılamadı. İnternet bağlantınızı kontrol edin."
+                                        statusMessage = timeoutMessage
                                     )
                                 }
                             } else {
@@ -2048,16 +2053,14 @@ class VideoCallViewModel(
                         }
                     }
                     is SignalingStatus.Connecting -> {
-                        if (signalingMode == SignalingMode.CLOUD) {
-                            // Sunucuya bağlanırken mesaj gösterme, startCall/joinCall zaten mesaj gösteriyor
-                            // Gereksiz mesaj kirliliğini önlemek için burada mesaj güncellemesi yapmıyoruz
-                        }
+                        // Sunucuya bağlanırken mesaj gösterme, startCall/joinCall zaten mesaj gösteriyor
+                        // Gereksiz mesaj kirliliğini önlemek için burada mesaj güncellemesi yapmıyoruz
+                        // CLOUD modunda özel bir işlem yapılmıyor
                     }
                     is SignalingStatus.Connected -> {
-                        if (signalingMode == SignalingMode.CLOUD) {
-                            // Sunucuya bağlandığında mesaj gösterme, normal akış devam ediyor
-                            // startCall/joinCall zaten "Teklif gönderildi" veya "Bağlandı" mesajı gösteriyor
-                        }
+                        // Sunucuya bağlandığında mesaj gösterme, normal akış devam ediyor
+                        // startCall/joinCall zaten "Teklif gönderildi" veya "Bağlandı" mesajı gösteriyor
+                        // CLOUD modunda özel bir işlem yapılmıyor
                     }
                     is SignalingStatus.Disconnected -> {
                         // Disconnected durumunda sadece aktif bir görüşme varsa mesaj göster
@@ -2080,7 +2083,7 @@ class VideoCallViewModel(
             directChannel = when (source) {
                 SignalingSource.DIRECT_CLIENT -> DirectChannel.CLIENT
                 SignalingSource.DIRECT_SERVER -> DirectChannel.SERVER
-                SignalingSource.CLOUD -> directChannel
+                else -> directChannel // Unreachable due to if check above, but required for exhaustive when
             }
         }
         when (message) {

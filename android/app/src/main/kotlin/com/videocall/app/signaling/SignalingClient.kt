@@ -21,6 +21,9 @@ import java.util.concurrent.TimeUnit
 class SignalingClient(
     private val url: String,
     private val okHttpClient: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(60, TimeUnit.SECONDS) // Render.com uyku modu için uzun timeout
+        .readTimeout(60, TimeUnit.SECONDS)
+        .writeTimeout(60, TimeUnit.SECONDS)
         .pingInterval(10, TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)
         .build()

@@ -16,7 +16,7 @@ import java.util.concurrent.TimeUnit
  */
 object SignalingServerDiscovery {
     private const val BACKEND_URL = "https://api.videocall.app" // Production backend URL
-    private const val DEFAULT_SIGNALING_URL = "wss://signaling.videocall.com/ws" // Fallback
+    private const val DEFAULT_SIGNALING_URL = "wss://video-call-dyx9.onrender.com/ws" // Fallback
     
     private val okHttpClient = OkHttpClient.Builder()
         .connectTimeout(5, TimeUnit.SECONDS)
