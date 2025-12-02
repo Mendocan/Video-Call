@@ -193,13 +193,14 @@ const server = createServer((req, res) => {
     
     // Duplicate bağlantıları temizle (aynı IP'den eski bağlantıları kapat)
     const ipToConnections = new Map();
-    connections.forEach((conn, ws) => {
+    connections.forEach((connectionInfo, ws) => {
+      // Map.forEach: (value, key) -> (connectionInfo, ws)
       if (ws.readyState === 1) { // Sadece açık bağlantıları kontrol et
-        const ip = conn.clientIP;
+        const ip = connectionInfo.clientIP;
         if (!ipToConnections.has(ip)) {
           ipToConnections.set(ip, []);
         }
-        ipToConnections.get(ip).push({ ws, conn, connectedAt: conn.connectedAt });
+        ipToConnections.get(ip).push({ ws, conn: connectionInfo, connectedAt: connectionInfo.connectedAt });
       }
     });
     
@@ -391,6 +392,7 @@ function handleMessage(ws, message) {
 
   // Register mesajı özel işlenir (kayıt olmadan diğer mesajlar kabul edilmez)
   if (message.type === 'register') {
+    console.log(`[Signaling] Register mesajı alındı: phoneNumber=${message.phoneNumber}, name=${message.name}, IP=${connectionInfo.clientIP}`);
     handleRegister(ws, message);
     return;
   }
