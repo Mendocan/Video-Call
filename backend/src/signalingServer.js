@@ -190,13 +190,47 @@ const server = createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     
     const registeredUsersList = Array.from(userRegistry.keys());
-    const connectionsList = Array.from(connections.values()).map(conn => ({
-      phoneNumber: conn.phoneNumber || 'Kayıtsız',
-      name: conn.name || 'İsimsiz',
-      connectedAt: conn.connectedAt,
-      isRegistered: conn.isRegistered,
-      clientIP: conn.clientIP
-    }));
+    
+    // Duplicate bağlantıları temizle (aynı IP'den eski bağlantıları kapat)
+    const ipToConnections = new Map();
+    connections.forEach((conn, ws) => {
+      if (ws.readyState === 1) { // Sadece açık bağlantıları kontrol et
+        const ip = conn.clientIP;
+        if (!ipToConnections.has(ip)) {
+          ipToConnections.set(ip, []);
+        }
+        ipToConnections.get(ip).push({ ws, conn, connectedAt: conn.connectedAt });
+      }
+    });
+    
+    // Her IP için en yeni bağlantıyı tut, eskilerini kapat
+    ipToConnections.forEach((connList, ip) => {
+      if (connList.length > 1) {
+        // En yeni bağlantıyı bul
+        connList.sort((a, b) => b.connectedAt - a.connectedAt);
+        const newest = connList[0];
+        // Eski bağlantıları kapat
+        for (let i = 1; i < connList.length; i++) {
+          console.log(`[Test] Duplicate bağlantı kapatılıyor: IP=${ip}, eski bağlantı`);
+          connList[i].ws.close(1000, 'Duplicate connection');
+          cleanupConnection(connList[i].ws);
+        }
+      }
+    });
+    
+    const connectionsList = Array.from(connections.values())
+      .filter(conn => {
+        // Sadece açık bağlantıları göster
+        const ws = Array.from(connections.keys()).find(w => connections.get(w) === conn);
+        return ws && ws.readyState === 1;
+      })
+      .map(conn => ({
+        phoneNumber: conn.phoneNumber || 'Kayıtsız',
+        name: conn.name || 'İsimsiz',
+        connectedAt: conn.connectedAt,
+        isRegistered: conn.isRegistered,
+        clientIP: conn.clientIP
+      }));
     
     const html = `<!DOCTYPE html>
 <html lang="tr">
