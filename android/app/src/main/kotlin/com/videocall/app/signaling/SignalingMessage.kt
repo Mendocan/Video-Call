@@ -1,8 +1,7 @@
 package com.videocall.app.signaling
 
 import org.json.JSONObject
-import org.webrtc.IceCandidate
-import org.webrtc.SessionDescription
+import com.videocall.app.directcall.ice.DirectCallIceCandidate
 
 sealed interface SignalingMessage {
     val type: String
@@ -17,15 +16,12 @@ sealed interface SignalingMessage {
 
     data class Offer(val sdp: String) : SignalingMessage {
         override val type: String = "offer"
-        @Suppress("UNUSED")
-        fun toSessionDescription(): SessionDescription =
-            SessionDescription(SessionDescription.Type.OFFER, sdp)
+        // DirectCall kullanılıyor - SessionDescription gerekmez, SDP string yeterli
     }
 
     data class Answer(val sdp: String) : SignalingMessage {
         override val type: String = "answer"
-        fun toSessionDescription(): SessionDescription =
-            SessionDescription(SessionDescription.Type.ANSWER, sdp)
+        // DirectCall kullanılıyor - SessionDescription gerekmez, SDP string yeterli
     }
 
     data class IceCandidatePayload(
@@ -33,8 +29,29 @@ sealed interface SignalingMessage {
         val sdpMid: String?,
         val sdpMLineIndex: Int
     ) {
-        fun toIceCandidate(): IceCandidate =
-            IceCandidate(sdpMid, sdpMLineIndex, candidate)
+        fun toDirectCallIceCandidate(): DirectCallIceCandidate? {
+            // SDP candidate string'ini parse et
+            // Format: "candidate:1 1 UDP 2130706431 192.168.1.100 54321 typ host"
+            return try {
+                val parts = candidate.split(" ")
+                if (parts.size >= 8 && parts[0] == "candidate:") {
+                    DirectCallIceCandidate(
+                        foundation = parts[0].substring(10), // "candidate:" sonrası
+                        componentId = parts[1].toIntOrNull() ?: 1,
+                        transport = parts[2],
+                        priority = parts[3].toLongOrNull() ?: 0L,
+                        address = parts[4],
+                        port = parts[5].toIntOrNull() ?: 0,
+                        type = parts[7] // "typ" sonrası
+                    )
+                } else {
+                    null
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("SignalingMessage", "ICE candidate parse hatası", e)
+                null
+            }
+        }
     }
 
     data class IceCandidateMessage(val payload: IceCandidatePayload) : SignalingMessage {
@@ -78,12 +95,47 @@ sealed interface SignalingMessage {
     }
 
     // Kullanıcı kayıt mesajları
-    data class Register(val phoneNumber: String, val name: String?) : SignalingMessage {
+    data class Register(val phoneNumber: String, val name: String?, val otp: String? = null) : SignalingMessage {
         override val type: String = "register"
     }
 
     data class Registered(val phoneNumber: String, val name: String?, val timestamp: String) : SignalingMessage {
         override val type: String = "registered"
+    }
+
+    // Login/Logout mesajları
+    data class LoggedIn(val phoneNumber: String, val name: String?, val timestamp: String) : SignalingMessage {
+        override val type: String = "logged-in"
+    }
+
+    data class LoggedOut(val phoneNumber: String, val timestamp: String) : SignalingMessage {
+        override val type: String = "logged-out"
+    }
+
+    // OTP mesajları
+    data class RequestOTP(val phoneNumber: String) : SignalingMessage {
+        override val type: String = "request-otp"
+    }
+
+    data class OTPSent(val phoneNumber: String, val testOTP: String? = null) : SignalingMessage {
+        override val type: String = "otp-sent"
+    }
+
+    data class OTPError(val message: String) : SignalingMessage {
+        override val type: String = "otp-error"
+    }
+
+    // FCM Token mesajları
+    data class RegisterFCMToken(val fcmToken: String) : SignalingMessage {
+        override val type: String = "register-fcm-token"
+    }
+
+    data class FCMTokenRegistered(val phoneNumber: String, val timestamp: String) : SignalingMessage {
+        override val type: String = "fcm-token-registered"
+    }
+
+    data class FCMTokenError(val message: String) : SignalingMessage {
+        override val type: String = "fcm-token-error"
     }
 
     // Arama mesajları
@@ -269,6 +321,21 @@ sealed interface SignalingMessage {
         override val type: String = "user-status"
     }
 
+    // Kullanıcı lookup (keşif) mesajları
+    data class UserLookup(val phoneNumber: String) : SignalingMessage {
+        override val type: String = "user-lookup"
+    }
+
+    data class UserLookupResponse(
+        val phoneNumber: String,
+        val isRegistered: Boolean,
+        val name: String? = null,
+        val isOnline: Boolean = false,
+        val lastSeen: String? = null
+    ) : SignalingMessage {
+        override val type: String = "user-lookup"
+    }
+
     data class UserStatusResponse(
         val phoneNumber: String,
         val name: String?,
@@ -382,6 +449,43 @@ sealed interface SignalingMessage {
                         name = json.optString("name").takeIf { it.isNotEmpty() },
                         timestamp = json.getString("timestamp")
                     )
+                }
+                "logged-in" -> {
+                    LoggedIn(
+                        phoneNumber = json.getString("phoneNumber"),
+                        name = json.optString("name").takeIf { it.isNotEmpty() },
+                        timestamp = json.getString("timestamp")
+                    )
+                }
+                "logged-out" -> {
+                    LoggedOut(
+                        phoneNumber = json.getString("phoneNumber"),
+                        timestamp = json.getString("timestamp")
+                    )
+                }
+                "request-otp" -> {
+                    RequestOTP(phoneNumber = json.getString("phoneNumber"))
+                }
+                "otp-sent" -> {
+                    OTPSent(
+                        phoneNumber = json.getString("phoneNumber"),
+                        testOTP = json.optString("testOTP").takeIf { it.isNotEmpty() }
+                    )
+                }
+                "otp-error" -> {
+                    OTPError(message = json.getString("message"))
+                }
+                "register-fcm-token" -> {
+                    RegisterFCMToken(fcmToken = json.getString("fcmToken"))
+                }
+                "fcm-token-registered" -> {
+                    FCMTokenRegistered(
+                        phoneNumber = json.getString("phoneNumber"),
+                        timestamp = json.getString("timestamp")
+                    )
+                }
+                "fcm-token-error" -> {
+                    FCMTokenError(message = json.getString("message"))
                 }
                 "call-request-sent" -> {
                     CallRequestSent(
@@ -543,6 +647,15 @@ sealed interface SignalingMessage {
                         connectedAt = json.optString("connectedAt").takeIf { it.isNotEmpty() }
                     )
                 }
+                "user-lookup" -> {
+                    UserLookupResponse(
+                        phoneNumber = json.getString("phoneNumber"),
+                        isRegistered = json.getBoolean("isRegistered"),
+                        name = json.optString("name").takeIf { it.isNotEmpty() },
+                        isOnline = json.optBoolean("isOnline", false),
+                        lastSeen = json.optString("lastSeen").takeIf { it.isNotEmpty() }
+                    )
+                }
                 "user-blocked" -> {
                     UserBlocked(
                         targetPhoneNumber = json.getString("targetPhoneNumber"),
@@ -639,6 +752,13 @@ sealed interface SignalingMessage {
                 is Register -> {
                     json.put("phoneNumber", message.phoneNumber)
                     message.name?.let { json.put("name", it) }
+                    message.otp?.let { json.put("otp", it) }
+                }
+                is RequestOTP -> {
+                    json.put("phoneNumber", message.phoneNumber)
+                }
+                is RegisterFCMToken -> {
+                    json.put("fcmToken", message.fcmToken)
                 }
                 is CallRequest -> {
                     message.targetPhoneNumber?.let { json.put("targetPhoneNumber", it) }
@@ -673,6 +793,9 @@ sealed interface SignalingMessage {
                 is UserStatusRequest -> {
                     json.put("phoneNumber", message.phoneNumber)
                 }
+                is UserLookup -> {
+                    json.put("phoneNumber", message.phoneNumber)
+                }
                 is BlockUser -> {
                     json.put("targetPhoneNumber", message.targetPhoneNumber)
                 }
@@ -684,6 +807,8 @@ sealed interface SignalingMessage {
                 }
                 // Backend'den gelen mesajlar (toJson'da kullanılmaz, sadece fromJson'da)
                 is Registered,
+                is LoggedIn,
+                is LoggedOut,
                 is CallRequestSent,
                 is IncomingCall,
                 is CallAccepted,
@@ -701,7 +826,12 @@ sealed interface SignalingMessage {
                 is UserStatusResponse,
                 is UserBlocked,
                 is UserUnblocked,
-                is BlockedUsersList -> {
+                is BlockedUsersList,
+                is FCMTokenError,
+                is FCMTokenRegistered,
+                is OTPError,
+                is OTPSent,
+                is UserLookupResponse -> {
                     // Bu mesajlar backend'den gelir, client'tan gönderilmez
                     // Sadece type yeterli
                 }

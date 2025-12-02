@@ -369,7 +369,13 @@ wss.on('connection', (ws, req) => {
 
   // Bağlantı kapandığında temizle
   ws.on('close', () => {
-    console.log(`[Signaling] Bağlantı kapandı`);
+    const connectionInfo = connections.get(ws);
+    if (connectionInfo && connectionInfo.isRegistered) {
+      const phoneNumber = connectionInfo.phoneNumber;
+      console.log(`[Signaling] 👋 Bağlantı kapandı (Logout): phoneNumber=${phoneNumber || 'Kayıtsız'}`);
+    } else {
+      console.log(`[Signaling] Bağlantı kapandı (kayıtsız kullanıcı)`);
+    }
     cleanupConnection(ws);
   });
 
@@ -561,6 +567,16 @@ function handleMessage(ws, message) {
     case 'unblock-user':
       // Kullanıcı engelini kaldırma
       handleUnblockUser(ws, message);
+      break;
+
+    case 'login':
+      // Kullanıcı giriş yapıyor (register'dan sonra)
+      handleLogin(ws, message);
+      break;
+
+    case 'logout':
+      // Kullanıcı çıkış yapıyor
+      handleLogout(ws, message);
       break;
 
     case 'get-blocked-users':
@@ -787,6 +803,17 @@ function handleRegister(ws, message) {
     if (ws.readyState === 1) { // WebSocket.OPEN
       ws.send(registeredMessage);
       console.log(`[Signaling] ✅ Registered mesajı gönderildi: phoneNumber=${normalizedPhoneNumber}`);
+      
+      // Register başarılı olduktan sonra otomatik login
+      // Login mesajı gönder (durumu "Online" yapmak için)
+      const loginMessage = JSON.stringify({
+        type: 'logged-in',
+        phoneNumber: normalizedPhoneNumber,
+        name: name || null,
+        timestamp: new Date().toISOString()
+      });
+      ws.send(loginMessage);
+      console.log(`[Signaling] ✅ Login mesajı gönderildi: phoneNumber=${normalizedPhoneNumber}`);
     } else {
       console.error(`[Signaling] ❌ Registered mesajı gönderilemedi: WebSocket durumu=${ws.readyState} (1=OPEN)`);
     }
@@ -1824,6 +1851,47 @@ function handleGetBlockedUsers(ws) {
     blockedUsers: blockedUsersList,
     count: blockedUsersList.length
   }));
+}
+
+// Kullanıcı giriş işleme (register'dan sonra)
+function handleLogin(ws, message) {
+  const connectionInfo = connections.get(ws);
+  if (!connectionInfo || !connectionInfo.isRegistered) {
+    ws.send(JSON.stringify({ 
+      type: 'login-error', 
+      message: 'Please register first' 
+    }));
+    return;
+  }
+
+  const phoneNumber = connectionInfo.phoneNumber;
+  const userInfo = userRegistry.get(phoneNumber);
+  
+  if (userInfo) {
+    userInfo.lastSeen = new Date();
+    console.log(`[Signaling] ✅ Kullanıcı giriş yaptı: phoneNumber=${phoneNumber}, name=${connectionInfo.name || 'N/A'}`);
+    
+    ws.send(JSON.stringify({
+      type: 'logged-in',
+      phoneNumber: phoneNumber,
+      name: connectionInfo.name,
+      timestamp: new Date().toISOString()
+    }));
+  }
+}
+
+// Kullanıcı çıkış işleme
+function handleLogout(ws, message) {
+  const connectionInfo = connections.get(ws);
+  if (!connectionInfo || !connectionInfo.isRegistered) {
+    return; // Zaten kayıtlı değilse logout'a gerek yok
+  }
+
+  const phoneNumber = connectionInfo.phoneNumber;
+  console.log(`[Signaling] 👋 Kullanıcı çıkış yaptı: phoneNumber=${phoneNumber}`);
+  
+  // Cleanup yapılacak (cleanupConnection çağrılacak)
+  // Burada sadece log yazıyoruz
 }
 
 // Bağlantı temizleme

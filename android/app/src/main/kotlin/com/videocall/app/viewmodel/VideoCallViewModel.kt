@@ -4,6 +4,9 @@ package com.videocall.app.viewmodel
 
 import android.app.Application
 import android.content.Context
+import android.media.Ringtone
+import android.media.RingtoneManager
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -36,17 +39,19 @@ import com.videocall.app.audio.AudioRoute
 import com.videocall.app.voice.VoiceCommandManager
 import com.videocall.app.voice.VoiceCommand
 import com.videocall.app.utils.CalendarManager
-import android.net.Uri
 import android.content.ContentResolver
 import android.content.Intent
 import java.io.File
 import java.io.FileOutputStream
 import android.util.Base64
-import com.videocall.app.rtc.RtcClient
-import com.videocall.app.rtc.RtcEvent
+import com.videocall.app.directcall.DirectCallClient
+import com.videocall.app.directcall.DirectCallEvent
+import com.videocall.app.directcall.DirectCallConnectionState
+import com.videocall.app.directcall.ice.DirectCallIceCandidate
 import com.videocall.app.utils.NotificationManager
 import com.videocall.app.utils.CallRecorder
-import com.videocall.app.utils.VideoProcessor
+// import com.videocall.app.utils.VideoProcessor // DirectCall'da şimdilik kullanılmıyor
+import com.videocall.app.utils.PhoneNumberUtils
 import com.videocall.app.widget.VideoCallWidgetProvider
 import com.videocall.app.signaling.LocalSignalingServer
 import com.videocall.app.signaling.PeerSignalingClient
@@ -63,13 +68,11 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
 import org.json.JSONArray
 import org.json.JSONObject
-import org.webrtc.IceCandidate
-import org.webrtc.SessionDescription
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicReference
 
 class VideoCallViewModel(
-    private val rtcClient: RtcClient,
+    private val directCallClient: DirectCallClient,
     initialSignalingClient: SignalingClient, // Mutable yapacağız
     private val contentResolver: ContentResolver,
     private val preferencesManager: PreferencesManager,
@@ -80,6 +83,9 @@ class VideoCallViewModel(
     
     // SignalingClient'ı mutable yap (backend'den IP alındıktan sonra güncellenecek)
     private var signalingClient: SignalingClient = initialSignalingClient
+    
+    // Kayıtlı telefon numarası (reconnect için)
+    private var registeredPhoneNumber: String? = null
 
     private val _uiState = MutableStateFlow(CallUiState())
     val uiState: StateFlow<CallUiState> = _uiState.asStateFlow()
@@ -95,12 +101,25 @@ class VideoCallViewModel(
 
     private val _incomingCall = MutableStateFlow<IncomingCall?>(null)
     val incomingCall: StateFlow<IncomingCall?> = _incomingCall.asStateFlow()
+    
+    // Outgoing call state (arama yapılıyor ekranı için)
+    data class OutgoingCall(
+        val contactName: String?,
+        val phoneNumber: String,
+        val roomCode: String? = null
+    )
+    
+    private val _outgoingCall = MutableStateFlow<OutgoingCall?>(null)
+    val outgoingCall: StateFlow<OutgoingCall?> = _outgoingCall.asStateFlow()
 
     private val _callHistory = MutableStateFlow<List<CallHistory>>(emptyList())
     val callHistory: StateFlow<List<CallHistory>> = _callHistory.asStateFlow()
     
     // Kişiye özel chat mesajları: phoneNumber -> List<ChatMessage>
     private val _chatMessagesByContact = MutableStateFlow<Map<String, List<ChatMessage>>>(emptyMap())
+    
+    // OTP state
+    // OTP StateFlow kaldırıldı - SMS doğrulama kullanılmıyor
     val chatMessagesByContact: StateFlow<Map<String, List<ChatMessage>>> = _chatMessagesByContact.asStateFlow()
     
     private val _callStatistics = MutableStateFlow(CallStatistics())
@@ -130,7 +149,7 @@ class VideoCallViewModel(
     private val peerSignalingClient = PeerSignalingClient()
     private val notificationManager = NotificationManager(context)
     private val callRecorder = CallRecorder(context)
-    private var videoProcessor: VideoProcessor? = null
+    // private var videoProcessor: VideoProcessor? = null // DirectCall'da şimdilik kullanılmıyor
     private val backgroundModeRef = AtomicReference(com.videocall.app.model.BackgroundMode.NONE)
     private val filterTypeRef = AtomicReference(com.videocall.app.model.FilterType.NONE)
     
@@ -162,12 +181,35 @@ class VideoCallViewModel(
     private var callDurationJob: Job? = null // Görüşme süresi takibi için
     private val _participants = MutableStateFlow<List<Participant>>(emptyList())
     val participants: StateFlow<List<Participant>> = _participants.asStateFlow()
+    
+    // Çağrı sesi (ringtone)
+    private var incomingCallRingtone: Ringtone? = null
 
     // handleIncomingCall fonksiyonunu ekle
     private fun handleIncomingCall(message: SignalingMessage.IncomingCall) {
+        // Backend'den gelen callerPhoneNumber zaten normalize edilmiş (0 ile başlayan format)
+        // Backend'den gelen callerName artık null olmayacak (fallback mekanizması var)
+        val normalizedCallerPhone = PhoneNumberUtils.toBackendFormat(message.callerPhoneNumber)
+        
+        // Kişi adını bul: önce backend'den gelen callerName, sonra addedContacts, sonra contacts
+        // Backend'den gelen callerName telefon numarası olabilir (fallback), o zaman ignore et
+        val contactName = message.callerName?.takeIf { 
+            it.isNotEmpty() && it != normalizedCallerPhone && it != message.callerPhoneNumber 
+        }
+            ?: _addedContacts.value.find { 
+                val normalizedContactPhone = it.phoneNumber?.let { PhoneNumberUtils.toBackendFormat(it) }
+                normalizedContactPhone == normalizedCallerPhone
+            }?.name
+            ?: _contacts.value.find { 
+                val normalizedContactPhone = it.phoneNumber?.let { PhoneNumberUtils.toBackendFormat(it) }
+                normalizedContactPhone == normalizedCallerPhone
+            }?.name
+        
+        android.util.Log.d("VideoCallViewModel", "Gelen arama: backendCallerName=${message.callerName}, foundContactName=$contactName, callerPhoneNumber=${message.callerPhoneNumber}, normalized=$normalizedCallerPhone")
+        
         val incomingCall = IncomingCall(
             callerPhoneNumber = message.callerPhoneNumber,
-            callerName = message.callerName,
+            callerName = contactName, // Bulunan kişi adını kullan
             roomCode = message.roomCode,
             groupId = message.groupId,
             isGroupCall = message.isGroupCall,
@@ -176,12 +218,43 @@ class VideoCallViewModel(
         _incomingCall.value = incomingCall
         
         // Bildirim göster
-        val displayName = message.callerName ?: message.callerPhoneNumber
+        val displayName = contactName ?: message.callerPhoneNumber
         notificationManager.showIncomingCallNotification(
             callerName = displayName,
             callerPhoneNumber = message.callerPhoneNumber,
             roomCode = message.roomCode
         )
+        
+        // Çağrı sesini çal
+        playIncomingCallRingtone()
+    }
+    
+    // Çağrı sesini başlat
+    private fun playIncomingCallRingtone() {
+        try {
+            // Önceki ringtone'u durdur
+            stopIncomingCallRingtone()
+            
+            // Sistem ringtone'unu al
+            val ringtoneUri: Uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+            incomingCallRingtone = RingtoneManager.getRingtone(context, ringtoneUri)
+            incomingCallRingtone?.play()
+            
+            android.util.Log.d("VideoCallViewModel", "Çağrı sesi başlatıldı")
+        } catch (e: Exception) {
+            android.util.Log.e("VideoCallViewModel", "Çağrı sesi çalınamadı", e)
+        }
+    }
+    
+    // Çağrı sesini durdur
+    private fun stopIncomingCallRingtone() {
+        try {
+            incomingCallRingtone?.stop()
+            incomingCallRingtone = null
+            android.util.Log.d("VideoCallViewModel", "Çağrı sesi durduruldu")
+        } catch (e: Exception) {
+            android.util.Log.e("VideoCallViewModel", "Çağrı sesi durdurulamadı", e)
+        }
     }
 
     data class IncomingCall(
@@ -198,7 +271,7 @@ class VideoCallViewModel(
     private enum class SignalingSource { CLOUD, DIRECT_SERVER, DIRECT_CLIENT }
 
     init {
-        observeRtcEvents()
+        observeDirectCallEvents()
         observeSignaling()
         observeSignalingStatus()
         ensureLocalSignalingServer()
@@ -209,6 +282,19 @@ class VideoCallViewModel(
         syncCalendarEvents() // Takvimden randevuları oku
         observeNetworkState()
         initializeLocalParticipant()
+        
+        // Foreground Service başlat - WebSocket bağlantısını canlı tutmak için
+        // NetworkManager'dan context al
+        try {
+            val contextField = networkManager.javaClass.getDeclaredField("context")
+            contextField.isAccessible = true
+            val context = contextField.get(networkManager) as? android.content.Context
+            context?.applicationContext?.let { 
+                com.videocall.app.services.ConnectionService.start(it)
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("VideoCallViewModel", "ConnectionService başlatılamadı", e)
+        }
         viewModelScope.launch {
             callHistory.collect {
                 _callStatistics.value = calculateCallStatistics(it) // Geçmiş değiştikçe istatistikleri güncelle
@@ -255,21 +341,96 @@ class VideoCallViewModel(
             }
             
             // Uygulama açıldığında otomatik kayıt
+            registerToBackend()
+        }
+    }
+    
+    /**
+     * Kullanıcıyı backend'e kaydet
+     * Telefon numarası varsa ve kayıtlı değilse kayıt yapar
+     */
+    fun registerToBackend() {
+        viewModelScope.launch {
             val phoneNumber = preferencesManager.getPhoneNumber()
-            if (phoneNumber != null) {
+            if (phoneNumber != null && phoneNumber.isNotBlank()) {
                 val name = _addedContacts.value.find { it.phoneNumber == phoneNumber }?.name
                 try {
-                    android.util.Log.d("VideoCallViewModel", "Kullanıcı kaydı başlatılıyor: phoneNumber=$phoneNumber, name=$name")
-                    signalingClient.register(phoneNumber, name)
-                    android.util.Log.d("VideoCallViewModel", "Kullanıcı kaydı mesajı gönderildi")
+                    // Telefon numarasını backend formatına çevir (0 ile başlayan format)
+                    val normalizedPhoneNumber = PhoneNumberUtils.toBackendFormat(phoneNumber)
+                    // Kayıtlı telefon numarasını sakla (reconnect için)
+                    registeredPhoneNumber = normalizedPhoneNumber
+                    android.util.Log.d("VideoCallViewModel", "📞 Kullanıcı kaydı başlatılıyor: phoneNumber=$normalizedPhoneNumber (original: $phoneNumber), name=$name")
+                    
+                    // WebSocket bağlantısını kontrol et ve gerekirse bekle
+                    val currentStatus = signalingClient.status.value
+                    if (currentStatus !is SignalingStatus.Connected) {
+                        android.util.Log.d("VideoCallViewModel", "⏳ WebSocket bağlantısı kuruluyor...")
+                        signalingClient.connect()
+                        // Bağlantının kurulmasını bekle (max 5 saniye)
+                        var waitCount = 0
+                        while (signalingClient.status.value !is SignalingStatus.Connected && waitCount < 50) {
+                            delay(100)
+                            waitCount++
+                        }
+                        if (signalingClient.status.value !is SignalingStatus.Connected) {
+                            android.util.Log.e("VideoCallViewModel", "❌ WebSocket bağlantısı kurulamadı")
+                            _uiState.update { it.copy(statusMessage = "Sunucuya bağlanılamadı") }
+                            return@launch
+                        }
+                    }
+                    
+                    android.util.Log.d("VideoCallViewModel", "✅ WebSocket bağlantısı hazır, register mesajı gönderiliyor...")
+                    signalingClient.register(normalizedPhoneNumber, name)
+                    // Reconnect'i etkinleştir
+                    signalingClient.enableReconnect()
+                    android.util.Log.d("VideoCallViewModel", "✅ Kullanıcı kaydı mesajı gönderildi")
                 } catch (e: Exception) {
-                    android.util.Log.e("VideoCallViewModel", "Kayıt hatası", e)
+                    android.util.Log.e("VideoCallViewModel", "❌ Kayıt hatası", e)
                     _uiState.update { it.copy(statusMessage = "Sunucuya bağlanılamadı: ${e.message}") }
                 }
             } else {
-                android.util.Log.w("VideoCallViewModel", "Telefon numarası kayıtlı değil, otomatik kayıt yapılamadı")
+                android.util.Log.w("VideoCallViewModel", "⚠️ Telefon numarası kayıtlı değil, otomatik kayıt yapılamadı")
+                _uiState.update { it.copy(statusMessage = "Telefon numaranızı kaydedin (Ayarlar)") }
             }
         }
+    }
+    
+    /**
+     * Bağlantıyı kontrol et ve gerekirse yeniden bağlan
+     * Uygulama foreground'a döndüğünde çağrılır
+     */
+    fun checkAndReconnect() {
+        viewModelScope.launch {
+            val currentStatus = signalingClient.status.value
+            if (currentStatus is SignalingStatus.Disconnected || currentStatus is SignalingStatus.Error) {
+                android.util.Log.d("VideoCallViewModel", "Bağlantı kesilmiş, yeniden bağlanılıyor...")
+                if (registeredPhoneNumber != null) {
+                    // Kayıtlı kullanıcı varsa tekrar register ol
+                    val name = _addedContacts.value.find { it.phoneNumber == preferencesManager.getPhoneNumber() }?.name
+                    try {
+                        signalingClient.register(registeredPhoneNumber!!, name)
+                        signalingClient.enableReconnect()
+                        _uiState.update { it.copy(statusMessage = "Yeniden bağlanılıyor...") }
+                    } catch (e: Exception) {
+                        android.util.Log.e("VideoCallViewModel", "Reconnect hatası", e)
+                    }
+                } else {
+                    // Kayıtlı kullanıcı yoksa registerToBackend çağır
+                    registerToBackend()
+                }
+            } else if (currentStatus is SignalingStatus.Connected) {
+                // Bağlantı zaten var, reconnect'i etkinleştir (gelecek kesintiler için)
+                signalingClient.enableReconnect()
+            }
+        }
+    }
+    
+    /**
+     * Reconnect'i etkinleştir
+     * Uygulama arka plana geçtiğinde çağrılır
+     */
+    fun enableReconnect() {
+        signalingClient.enableReconnect()
     }
     
     private fun initializeLocalParticipant() {
@@ -292,6 +453,13 @@ class VideoCallViewModel(
                 // Ağ durumu değiştiğinde UI'ı güncelle
                 if (!state.isConnected) {
                     _uiState.update { it.copy(statusMessage = "İnternet bağlantısı yok") }
+                } else {
+                    // İnternet bağlantısı geri geldiğinde reconnect'i tetikle
+                    val currentStatus = signalingClient.status.value
+                    if (currentStatus is SignalingStatus.Disconnected || currentStatus is SignalingStatus.Error) {
+                        android.util.Log.d("VideoCallViewModel", "İnternet bağlantısı geri geldi, reconnect başlatılıyor...")
+                        checkAndReconnect()
+                    }
                 }
             }
         }
@@ -310,7 +478,7 @@ class VideoCallViewModel(
                             // QR okutan taraf bağlandı, sunucu tarafında offer gönder
                             viewModelScope.launch {
                                 try {
-                                    val offer = rtcClient.createOffer()
+                                    val offer = directCallClient.createOffer(audioOnly = false)
                                     sendOffer(offer)
                                     _uiState.update { it.copy(statusMessage = "Teklif gönderildi, yanıt bekleniyor...") }
                                 } catch (e: Exception) {
@@ -437,7 +605,7 @@ class VideoCallViewModel(
         }
     }
 
-    fun startCallWithContact(contact: Contact) {
+    fun startCallWithContact(contact: Contact, audioOnly: Boolean = false) {
         val networkState = _networkState.value
         if (!networkState.isConnected) {
             _uiState.update { it.copy(statusMessage = "İnternet bağlantısı gerekli. ${networkManager.getNetworkTypeText(networkState.networkType)}") }
@@ -473,15 +641,30 @@ class VideoCallViewModel(
                 return@launch
             }
             
-            _uiState.update { it.copy(statusMessage = "Arama başlatılıyor...") }
+            // Audio-only modunu ayarla
+            _uiState.update { 
+                it.copy(
+                    statusMessage = "Arama başlatılıyor...",
+                    isAudioOnly = audioOnly
+                ) 
+            }
             
-            android.util.Log.d("VideoCallViewModel", "Arama başlatılıyor: target=${contact.phoneNumber}, caller=$myPhoneNumber")
-            signalingClient.startCall(
-                targetPhoneNumber = contact.phoneNumber,
-                callerPhoneNumber = myPhoneNumber,
-                callerName = myName
-            )
-            android.util.Log.d("VideoCallViewModel", "Arama mesajı gönderildi")
+            // Telefon numaralarını normalize et
+            val normalizedTarget = PhoneNumberUtils.toBackendFormat(contact.phoneNumber)
+            val normalizedCaller = PhoneNumberUtils.toBackendFormat(myPhoneNumber)
+            
+            android.util.Log.d("VideoCallViewModel", "Arama başlatılıyor: target=$normalizedTarget (original: ${contact.phoneNumber}), caller=$normalizedCaller (original: $myPhoneNumber), audioOnly=$audioOnly")
+            try {
+                signalingClient.startCall(
+                    targetPhoneNumber = normalizedTarget,
+                    callerPhoneNumber = normalizedCaller,
+                    callerName = myName
+                )
+                android.util.Log.d("VideoCallViewModel", "Arama mesajı gönderildi")
+            } catch (e: Exception) {
+                android.util.Log.e("VideoCallViewModel", "Arama başlatma hatası", e)
+                _uiState.update { it.copy(statusMessage = "Arama başlatılamadı: ${e.message}") }
+            }
             
             addCallToHistory(
                 contactName = contact.name,
@@ -746,12 +929,12 @@ class VideoCallViewModel(
         _uiState.update { it.copy(roomCode = normalized) }
     }
 
-    fun attachLocalRenderer(renderer: org.webrtc.SurfaceViewRenderer) {
-        rtcClient.attachLocalRenderer(renderer)
+    fun attachLocalRenderer(renderer: android.view.SurfaceView) {
+        directCallClient.attachLocalRenderer(renderer)
     }
 
-    fun attachRemoteRenderer(renderer: org.webrtc.SurfaceViewRenderer) {
-        rtcClient.attachRemoteRenderer(renderer)
+    fun attachRemoteRenderer(renderer: android.view.SurfaceView) {
+        directCallClient.attachRemoteRenderer(renderer)
     }
 
     fun startCall() {
@@ -786,7 +969,7 @@ class VideoCallViewModel(
                 
                 // Cloud signaling ile bağlan
                 signalingClient.connect(room)
-                val offer = rtcClient.createOffer(audioOnly = isAudioOnly)
+                val offer = directCallClient.createOffer(audioOnly = isAudioOnly)
                 sendOffer(offer)
                 _uiState.update { it.copy(statusMessage = "Teklif gönderildi, yanıt bekleniyor...") }
                 
@@ -834,6 +1017,17 @@ class VideoCallViewModel(
         }
     }
 
+    fun cancelOutgoingCall() {
+        val outgoingCall = _outgoingCall.value
+        if (outgoingCall != null && outgoingCall.roomCode != null) {
+            // Arama reddetme mesajı gönder (eğer groupId varsa)
+            // Şimdilik sadece state'i temizle
+            android.util.Log.d("VideoCallViewModel", "Outgoing call iptal edildi: ${outgoingCall.phoneNumber}")
+        }
+        _outgoingCall.value = null
+        _uiState.update { it.copy(statusMessage = "Arama iptal edildi") }
+    }
+    
     fun hangUp() {
         stopCallDurationTimer()
         // Bluetooth SCO'yu durdur
@@ -866,7 +1060,7 @@ class VideoCallViewModel(
         }
         directChannel = DirectChannel.NONE
         signalingMode = SignalingMode.CLOUD
-        rtcClient.disconnect()
+        directCallClient.disconnect()
         activeRoom = null
         _uiState.update {
             CallUiState(
@@ -913,19 +1107,20 @@ class VideoCallViewModel(
 
     fun toggleCamera() {
         val enabled = !_uiState.value.isCameraEnabled
-        rtcClient.setVideoEnabled(enabled)
+        directCallClient.setVideoEnabled(enabled)
         _uiState.update { it.copy(isCameraEnabled = enabled) }
     }
 
     fun toggleMicrophone() {
         val enabled = !_uiState.value.isMicEnabled
-        rtcClient.setAudioEnabled(enabled)
+        directCallClient.setAudioEnabled(enabled)
         _uiState.update { it.copy(isMicEnabled = enabled) }
     }
     
     fun toggleAudioOnlyMode() {
         val newAudioOnly = !_uiState.value.isAudioOnly
-        rtcClient.setAudioOnlyMode(newAudioOnly)
+        // DirectCall'da audioOnly mode yok, sadece video enable/disable
+        directCallClient.setVideoEnabled(!newAudioOnly)
         _uiState.update { 
             it.copy(
                 isAudioOnly = newAudioOnly,
@@ -936,7 +1131,8 @@ class VideoCallViewModel(
     }
     
     fun setAudioOnlyMode(enabled: Boolean) {
-        rtcClient.setAudioOnlyMode(enabled)
+        // DirectCall'da audioOnly mode yok, sadece video enable/disable
+        directCallClient.setVideoEnabled(!enabled)
         _uiState.update { 
             it.copy(
                 isAudioOnly = enabled,
@@ -947,7 +1143,7 @@ class VideoCallViewModel(
     }
     
     fun setVideoQuality(quality: com.videocall.app.model.VideoQuality) {
-        rtcClient.setVideoQuality(quality)
+        // DirectCall'da video quality ayarı şimdilik yok
         _uiState.update { it.copy(videoQuality = quality) }
     }
     
@@ -972,7 +1168,8 @@ class VideoCallViewModel(
         filterTypeRef.set(filter)
         
         // Video processor'ı güncelle
-        videoProcessor?.let { processor ->
+        // videoProcessor?.let { processor -> // DirectCall'da şimdilik kullanılmıyor
+        null?.let { processor ->
             // Processor zaten çalışıyor, sadece filtreyi güncelle
         } ?: run {
             // Processor yoksa oluştur (ilk görüşme başladığında)
@@ -984,9 +1181,16 @@ class VideoCallViewModel(
      * Video processor'ı başlatır
      */
     private fun initializeVideoProcessor() {
+        // videoProcessor DirectCall'da şimdilik kullanılmıyor
+        android.util.Log.w("VideoCallViewModel", "Video processor DirectCall'da henüz desteklenmiyor")
+        /*
         if (videoProcessor == null) {
             try {
-                val eglBase = rtcClient.getEglBase()
+                // DirectCall'da video processor şimdilik yok
+                // TODO: DirectCall için video processor implementasyonu
+                android.util.Log.w("VideoCallViewModel", "Video processor DirectCall'da henüz desteklenmiyor")
+                /*
+                val eglBase = directCallClient.getEglBase()
                 videoProcessor = VideoProcessor(
                     context = context,
                     eglBase = eglBase,
@@ -996,11 +1200,12 @@ class VideoCallViewModel(
                 )
                 
                 // Local video track'e processor ekle
-                val localTrack = rtcClient.getLocalVideoTrack()
+                val localTrack = directCallClient.getLocalVideoTrack()
                 val processedTrack = videoProcessor!!.getProcessedVideoTrack(
-                    rtcClient.getPeerConnectionFactory(),
+                    directCallClient.getPeerConnectionFactory(),
                     localTrack
                 )
+                */
                 
                 // İşlenmiş track'i renderer'lara bağla
                 // Not: Bu implementasyon basitleştirilmiş, gerçek kullanımda renderer'ları güncellemek gerekir
@@ -1008,6 +1213,7 @@ class VideoCallViewModel(
                 android.util.Log.e("VideoCallViewModel", "Video processor başlatılamadı", e)
             }
         }
+        */
     }
     
     fun cycleFilter() {
@@ -1424,31 +1630,41 @@ class VideoCallViewModel(
     }
 
     fun switchCamera() {
-        rtcClient.switchCamera()
+        directCallClient.switchCamera()
     }
     
     fun toggleScreenSharing(resultCode: Int? = null, data: Intent? = null) {
-        if (rtcClient.isScreenSharing()) {
-            rtcClient.stopScreenCapture()
-            _uiState.update { it.copy(isScreenSharing = false) }
+        // DirectCall'da screen sharing şimdilik yok
+        _uiState.update { it.copy(isScreenSharing = false) }
+        android.util.Log.w("VideoCallViewModel", "Screen sharing DirectCall'da henüz desteklenmiyor")
+        // TODO: Screen sharing implementasyonu
+        /*
+        if (directCallClient.isScreenSharing()) {
+            directCallClient.stopScreenCapture()
         } else {
-            // MediaProjection permission request gerekli
-            // Bu UI'dan yapılacak, burada sadece state güncellemesi
-            if (resultCode != null && data != null) {
-                rtcClient.startScreenCapture(resultCode, data)
-                _uiState.update { it.copy(isScreenSharing = true) }
-            }
+            // Screen sharing başlat
         }
+        */
     }
     
     fun startScreenSharing(resultCode: Int, data: Intent) {
-        rtcClient.startScreenCapture(resultCode, data)
-        _uiState.update { it.copy(isScreenSharing = true) }
+        // DirectCall'da şimdilik kullanılmıyor
+        android.util.Log.w("VideoCallViewModel", "Screen sharing DirectCall'da henüz desteklenmiyor")
+        _uiState.update { it.copy(isScreenSharing = false) }
+        /*
+        // rtcClient.startScreenCapture(resultCode, data)
+        // _uiState.update { it.copy(isScreenSharing = true) }
+        */
     }
     
     fun stopScreenSharing() {
-        rtcClient.stopScreenCapture()
+        // DirectCall'da şimdilik kullanılmıyor
+        android.util.Log.w("VideoCallViewModel", "Screen sharing DirectCall'da henüz desteklenmiyor")
         _uiState.update { it.copy(isScreenSharing = false) }
+        /*
+        // rtcClient.stopScreenCapture()
+        // _uiState.update { it.copy(isScreenSharing = false) }
+        */
     }
     
     // Scheduled Calls Functions
@@ -1955,29 +2171,21 @@ class VideoCallViewModel(
         }
     }
 
-    private fun observeRtcEvents() {
+    private fun observeDirectCallEvents() {
         viewModelScope.launch {
-            rtcClient.events.collect { event ->
+            directCallClient.events.collect { event ->
                 when (event) {
-                    is RtcEvent.ConnectionStateChanged -> {
-                        val connected = event.state == org.webrtc.PeerConnection.PeerConnectionState.CONNECTED
+                    is DirectCallEvent.ConnectionStateChanged -> {
+                        val connected = event.state == DirectCallConnectionState.CONNECTED
                         if (connected) {
                             // Görüşme başladı - süre takibini başlat
                             val startTime = System.currentTimeMillis()
                             
-                            // Video kaydını başlat (local ve remote video track'ler ile)
-                            val localVideoTrack = rtcClient.getLocalVideoTrack()
-                            val remoteVideoTrack = rtcClient.getRemoteVideoTrack()
-                            val videoRecordingPath = callRecorder.startVideoRecording(
-                                localVideoTrack = localVideoTrack,
-                                remoteVideoTrack = remoteVideoTrack
-                            )
-                            
-                            // Ses kaydını da başlat (video kaydı ile birleştirilecek)
+                            // Video kaydını başlat (DirectCall için şimdilik basit)
                             val audioRecordingPath = callRecorder.startRecording(includeVideo = false)
                             
-                            if (videoRecordingPath != null || audioRecordingPath != null) {
-                                android.util.Log.i("VideoCallViewModel", "Görüşme kaydı başlatıldı - Video: $videoRecordingPath, Audio: $audioRecordingPath")
+                            if (audioRecordingPath != null) {
+                                android.util.Log.i("VideoCallViewModel", "Görüşme kaydı başlatıldı - Audio: $audioRecordingPath")
                             }
                             _uiState.update {
                                 it.copy(
@@ -2000,10 +2208,10 @@ class VideoCallViewModel(
                             }
                         }
                     }
-                    is RtcEvent.IceCandidateGenerated -> sendIceCandidate(event.candidate)
-                    is RtcEvent.Error -> _uiState.update { it.copy(statusMessage = event.message) }
-                    RtcEvent.LocalVideoStarted -> _uiState.update { it.copy(localVideoVisible = true) }
-                    RtcEvent.RemoteVideoAvailable -> _uiState.update { it.copy(remoteVideoVisible = true) }
+                    is DirectCallEvent.IceCandidateGenerated -> sendIceCandidate(event.candidate)
+                    is DirectCallEvent.Error -> _uiState.update { it.copy(statusMessage = event.message) }
+                    DirectCallEvent.LocalVideoStarted -> _uiState.update { it.copy(localVideoVisible = true) }
+                    DirectCallEvent.RemoteVideoAvailable -> _uiState.update { it.copy(remoteVideoVisible = true) }
                 }
             }
         }
@@ -2024,31 +2232,29 @@ class VideoCallViewModel(
                     is SignalingStatus.Error -> {
                         val errorMessage = status.throwable.message ?: "Bilinmeyen hata"
                         
+                        // Reconnect'i etkinleştir
+                        signalingClient.enableReconnect()
+                        
                         if (signalingMode == SignalingMode.CLOUD) {
-                            // Sunucu çalıştığında normal hata mesajı göster
-                            // Yerel ağ önerisi sadece kullanıcı yerel ağ modunu açtığında veya özellikle istediğinde gösterilir
-                            val isNetworkError = errorMessage.contains("Unable to resolve host", ignoreCase = true) ||
-                                    errorMessage.contains("No address associated with hostname", ignoreCase = true) ||
-                                    errorMessage.contains("Connection refused", ignoreCase = true) ||
-                                    errorMessage.contains("timeout", ignoreCase = true)
+                            // Hata mesajını kullanıcı dostu hale getir
+                            val userFriendlyMessage = when {
+                                errorMessage.contains("Software caused connection abort", ignoreCase = true) -> 
+                                    "Bağlantı kesildi, yeniden bağlanılıyor..."
+                                errorMessage.contains("Unable to resolve host", ignoreCase = true) ||
+                                errorMessage.contains("No address associated with hostname", ignoreCase = true) -> 
+                                    "Sunucu bulunamadı, yeniden bağlanılıyor..."
+                                errorMessage.contains("Connection refused", ignoreCase = true) -> 
+                                    "Sunucuya bağlanılamadı, yeniden bağlanılıyor..."
+                                errorMessage.contains("timeout", ignoreCase = true) -> 
+                                    "Bağlantı zaman aşımı, yeniden bağlanılıyor..."
+                                else -> 
+                                    "Bağlantı hatası, yeniden bağlanılıyor..."
+                            }
                             
-                            if (isNetworkError) {
-                                val timeoutMessage = if (errorMessage.contains("timeout", ignoreCase = true)) {
-                                    "Sunucuya bağlanılamadı: Read timed out. Sunucu uyku modunda olabilir, lütfen tekrar deneyin."
-                                } else {
-                                    "Sunucuya bağlanılamadı. İnternet bağlantınızı kontrol edin."
-                                }
-                                _uiState.update { 
-                                    it.copy(
-                                        statusMessage = timeoutMessage
-                                    )
-                                }
-                            } else {
-                                _uiState.update { 
-                                    it.copy(
-                                        statusMessage = "Bağlantı hatası: $errorMessage"
-                                    )
-                                }
+                            _uiState.update { 
+                                it.copy(
+                                    statusMessage = userFriendlyMessage
+                                )
                             }
                         }
                     }
@@ -2058,16 +2264,42 @@ class VideoCallViewModel(
                         // CLOUD modunda özel bir işlem yapılmıyor
                     }
                     is SignalingStatus.Connected -> {
-                        // Sunucuya bağlandığında mesaj gösterme, normal akış devam ediyor
-                        // startCall/joinCall zaten "Teklif gönderildi" veya "Bağlandı" mesajı gösteriyor
-                        // CLOUD modunda özel bir işlem yapılmıyor
+                        // Sunucuya bağlandığında reconnect'i durdur ve başarı mesajı göster
+                        signalingClient.stopReconnect()
+                        
+                        // Hata veya bağlantı mesajları varsa temizle
+                        val currentMessage = _uiState.value.statusMessage
+                        if (currentMessage.contains("bağlantı", ignoreCase = true) || 
+                            currentMessage.contains("Bağlantı", ignoreCase = true) ||
+                            currentMessage.contains("yeniden", ignoreCase = true) ||
+                            currentMessage.contains("hatası", ignoreCase = true) ||
+                            currentMessage.contains("Hata", ignoreCase = true) ||
+                            currentMessage.contains("kesildi", ignoreCase = true) ||
+                            currentMessage.contains("zaman aşımı", ignoreCase = true) ||
+                            currentMessage.contains("Software caused", ignoreCase = true) ||
+                            currentMessage.contains("bulunamadı", ignoreCase = true)) {
+                            _uiState.update { 
+                                it.copy(statusMessage = "Sunucuya bağlandı")
+                            }
+                            android.util.Log.d("VideoCallViewModel", "Bağlantı başarılı, durum mesajı güncellendi")
+                        }
                     }
                     is SignalingStatus.Disconnected -> {
-                        // Disconnected durumunda sadece aktif bir görüşme varsa mesaj göster
+                        // Reconnect'i etkinleştir
+                        signalingClient.enableReconnect()
+                        
+                        // Disconnected durumunda mesaj göster
                         if (signalingMode == SignalingMode.CLOUD && activeRoom != null && _uiState.value.isConnected) {
                             _uiState.update { 
                                 it.copy(
-                                    statusMessage = "Sunucu bağlantısı kesildi"
+                                    statusMessage = "Sunucu bağlantısı kesildi, yeniden bağlanılıyor..."
+                                )
+                            }
+                        } else if (signalingMode == SignalingMode.CLOUD && registeredPhoneNumber != null) {
+                            // Kayıtlı kullanıcı varsa reconnect'i başlat
+                            _uiState.update { 
+                                it.copy(
+                                    statusMessage = "Yeniden bağlanılıyor..."
                                 )
                             }
                         }
@@ -2088,18 +2320,48 @@ class VideoCallViewModel(
         }
         when (message) {
             is SignalingMessage.Offer -> handleIncomingOffer(source, message)
-            is SignalingMessage.Answer -> rtcClient.setRemoteDescription(message.toSessionDescription())
-            is SignalingMessage.IceCandidateMessage -> rtcClient.addIceCandidate(message.payload.toIceCandidate())
+            is SignalingMessage.Answer -> {
+                directCallClient.setRemoteDescription(message.sdp, isOffer = false)
+            }
+            is SignalingMessage.IceCandidateMessage -> {
+                val candidate = message.payload.toDirectCallIceCandidate()
+                if (candidate != null) {
+                    directCallClient.addIceCandidate(candidate)
+                }
+            }
             is SignalingMessage.Presence -> _uiState.update { it.copy(participants = message.participants) }
-            is SignalingMessage.Error -> _uiState.update { it.copy(statusMessage = message.reason) }
+            is SignalingMessage.Error -> {
+                // "Please register first" mesajını Türkçe'ye çevir ve otomatik kayıt yap
+                val errorMessage = message.reason
+                if (errorMessage.contains("register", ignoreCase = true)) {
+                    android.util.Log.w("VideoCallViewModel", "Kayıt hatası: $errorMessage, otomatik kayıt yapılıyor...")
+                    // Otomatik kayıt yap
+                    registerToBackend()
+                    _uiState.update { it.copy(statusMessage = "Sunucuya bağlanılıyor...") }
+                } else {
+                    _uiState.update { it.copy(statusMessage = errorMessage) }
+                }
+            }
             is SignalingMessage.Chat -> handleIncomingChatMessage(message)
             is SignalingMessage.FileShare -> handleIncomingFileShare(message)
             // Yeni mesaj tipleri
             is SignalingMessage.Registered -> {
-                android.util.Log.i("VideoCallViewModel", "Kayıt başarılı: phoneNumber=${message.phoneNumber}, name=${message.name}")
+                android.util.Log.i("VideoCallViewModel", "✅ Kayıt başarılı: phoneNumber=${message.phoneNumber}, name=${message.name}")
                 _uiState.update { 
                     it.copy(
                         statusMessage = "Sunucuya bağlandı"
+                    ) 
+                }
+                // Kayıt başarılı - artık backend'de kayıtlıyız
+                
+                // FCM Token'ı backend'e gönder
+                sendFCMTokenToBackend()
+            }
+            is SignalingMessage.LoggedIn -> {
+                android.util.Log.i("VideoCallViewModel", "✅ Giriş başarılı: phoneNumber=${message.phoneNumber}, name=${message.name}")
+                _uiState.update { 
+                    it.copy(
+                        statusMessage = "Çevrimiçi"
                     ) 
                 }
             }
@@ -2108,7 +2370,26 @@ class VideoCallViewModel(
                 handleIncomingCall(message)
             }
             is SignalingMessage.CallRequestSent -> {
-                android.util.Log.d("VideoCallViewModel", "Arama isteği gönderildi: groupId=${message.groupId}, roomCode=${message.roomCode}")
+                android.util.Log.d("VideoCallViewModel", "Arama isteği gönderildi: groupId=${message.groupId}, roomCode=${message.roomCode}, targetPhoneNumber=${message.targetPhoneNumber}")
+                // Outgoing call screen göster
+                val targetPhoneNumber = message.targetPhoneNumber
+                if (targetPhoneNumber != null) {
+                    // Backend'den normalize edilmiş telefon numarası geliyor, contact bulurken normalize et
+                    val normalizedTarget = PhoneNumberUtils.toBackendFormat(targetPhoneNumber)
+                    val contact = _addedContacts.value.find { 
+                        val normalizedContactPhone = it.phoneNumber?.let { PhoneNumberUtils.toBackendFormat(it) }
+                        normalizedContactPhone == normalizedTarget
+                    } ?: _contacts.value.find { 
+                        val normalizedContactPhone = it.phoneNumber?.let { PhoneNumberUtils.toBackendFormat(it) }
+                        normalizedContactPhone == normalizedTarget
+                    }
+                    android.util.Log.d("VideoCallViewModel", "Outgoing call: targetPhoneNumber=$targetPhoneNumber, normalized=$normalizedTarget, contactName=${contact?.name}")
+                    _outgoingCall.value = OutgoingCall(
+                        contactName = contact?.name,
+                        phoneNumber = targetPhoneNumber,
+                        roomCode = message.roomCode
+                    )
+                }
                 _uiState.update { 
                     it.copy(
                         roomCode = message.roomCode ?: "",
@@ -2118,6 +2399,8 @@ class VideoCallViewModel(
             }
             is SignalingMessage.CallError -> {
                 android.util.Log.e("VideoCallViewModel", "Arama hatası: ${message.reason}, targetPhoneNumber=${message.targetPhoneNumber}")
+                // Outgoing call screen'i kapat
+                _outgoingCall.value = null
                 _uiState.update { 
                     it.copy(
                         statusMessage = "Arama hatası: ${message.reason}"
@@ -2129,6 +2412,8 @@ class VideoCallViewModel(
                 _callHistory.value = currentHistory
             }
             is SignalingMessage.CallAccepted -> {
+                // Arama kabul edildi, outgoing call screen'i kapat
+                _outgoingCall.value = null
                 // Arama kabul edildi, room'a bağlan
                 activeRoom = message.roomCode
                 _uiState.update { 
@@ -2140,20 +2425,77 @@ class VideoCallViewModel(
                 // Room'a bağlan ve offer gönder
                 viewModelScope.launch {
                     signalingClient.connect(message.roomCode)
-                    val offer = rtcClient.createOffer(audioOnly = _uiState.value.isAudioOnly)
+                    val offer = directCallClient.createOffer(audioOnly = _uiState.value.isAudioOnly)
                     sendOffer(offer)
                 }
             }
             is SignalingMessage.CallAcceptedBy -> {
-                // Başka biri aramayı kabul etti
+                // Başka biri aramayı kabul etti - room'a bağlan ve offer gönder
+                android.util.Log.d("VideoCallViewModel", "Aramayı kabul eden: ${message.name ?: message.phoneNumber}, roomCode=${message.roomCode}")
+                activeRoom = message.roomCode
                 _uiState.update { 
                     it.copy(
-                        statusMessage = "${message.name ?: message.phoneNumber} aramayı kabul etti"
+                        roomCode = message.roomCode,
+                        statusMessage = "${message.name ?: message.phoneNumber} aramayı kabul etti, bağlanılıyor..."
+                    ) 
+                }
+                // Room'a bağlan ve offer gönder
+                viewModelScope.launch {
+                    try {
+                        signalingClient.connect(message.roomCode)
+                        val offer = directCallClient.createOffer(audioOnly = _uiState.value.isAudioOnly)
+                        sendOffer(offer)
+                        _uiState.update { 
+                            it.copy(
+                                statusMessage = "Teklif gönderildi, yanıt bekleniyor..."
+                            ) 
+                        }
+                    } catch (e: Exception) {
+                        android.util.Log.e("VideoCallViewModel", "Offer gönderme hatası", e)
+                        _uiState.update { 
+                            it.copy(
+                                statusMessage = "Bağlantı kurulamadı: ${e.message}"
+                            ) 
+                        }
+                    }
+                }
+            }
+            is SignalingMessage.UserLookupResponse -> {
+                android.util.Log.d("VideoCallViewModel", "Kullanıcı lookup sonucu: phoneNumber=${message.phoneNumber}, isRegistered=${message.isRegistered}, name=${message.name}")
+                if (message.isRegistered) {
+                    _uiState.update { 
+                        it.copy(
+                            statusMessage = "${message.name ?: message.phoneNumber} uygulamada kayıtlı${if (message.isOnline) " (online)" else " (offline)"}"
+                        ) 
+                    }
+                } else {
+                    _uiState.update { 
+                        it.copy(
+                            statusMessage = "Bu numara uygulamada kayıtlı değil"
+                        ) 
+                    }
+                }
+            }
+            is SignalingMessage.OTPSent -> {
+                // OTP mesajı kaldırıldı - SMS doğrulama kullanılmıyor
+                android.util.Log.d("VideoCallViewModel", "OTP mesajı alındı ama kullanılmıyor: phoneNumber=${message.phoneNumber}")
+                _uiState.update { 
+                    it.copy(
+                        statusMessage = "Doğrulama kodu gönderildi"
+                    ) 
+                }
+            }
+            is SignalingMessage.OTPError -> {
+                android.util.Log.e("VideoCallViewModel", "OTP hatası: ${message.message}")
+                _uiState.update { 
+                    it.copy(
+                        statusMessage = "OTP hatası: ${message.message}"
                     ) 
                 }
             }
             is SignalingMessage.CallRejectedBy -> {
-                // Başka biri aramayı reddetti
+                // Başka biri aramayı reddetti, outgoing call screen'i kapat
+                _outgoingCall.value = null
                 _uiState.update { 
                     it.copy(
                         statusMessage = "${message.name ?: message.phoneNumber} aramayı reddetti"
@@ -2165,33 +2507,36 @@ class VideoCallViewModel(
     }
 
     private fun extractPhoneFromOffer(offer: SignalingMessage.Offer): String? {
+        // DirectCall'da SDP string'den telefon numarası çıkarılamaz
+        // Şimdilik null döndür, başka bir yöntemle alınmalı
+        return null
         // SDP'den telefon numarası çıkarma (basit implementasyon)
         // Gerçek implementasyonda signaling server'dan gelen metadata kullanılabilir
         return null // Şimdilik null, daha sonra geliştirilebilir
     }
 
-    private fun sendOffer(offer: SessionDescription) {
+    private fun sendOffer(offer: String) {
         when (signalingMode) {
             SignalingMode.CLOUD -> signalingClient.sendOffer(offer)
-            SignalingMode.DIRECT -> sendDirectMessage(SignalingMessage.Offer(offer.description))
+            SignalingMode.DIRECT -> sendDirectMessage(SignalingMessage.Offer(offer))
         }
     }
 
-    private fun sendAnswer(answer: SessionDescription) {
+    private fun sendAnswer(answer: String) {
         when (signalingMode) {
             SignalingMode.CLOUD -> signalingClient.sendAnswer(answer)
-            SignalingMode.DIRECT -> sendDirectMessage(SignalingMessage.Answer(answer.description))
+            SignalingMode.DIRECT -> sendDirectMessage(SignalingMessage.Answer(answer))
         }
     }
 
-    private fun sendIceCandidate(candidate: IceCandidate) {
+    private fun sendIceCandidate(candidate: DirectCallIceCandidate) {
         when (signalingMode) {
             SignalingMode.CLOUD -> signalingClient.sendIceCandidate(candidate)
             SignalingMode.DIRECT -> {
                 val payload = SignalingMessage.IceCandidatePayload(
-                    candidate = candidate.sdp,
-                    sdpMid = candidate.sdpMid,
-                    sdpMLineIndex = candidate.sdpMLineIndex
+                    candidate = candidate.toSdpString(),
+                    sdpMid = null,
+                    sdpMLineIndex = candidate.componentId
                 )
                 sendDirectMessage(SignalingMessage.IceCandidateMessage(payload))
             }
@@ -2274,7 +2619,7 @@ class VideoCallViewModel(
         try {
             activeRoom = "DIRECT"
             _uiState.update { it.copy(statusMessage = "${contact.name} ile doğrudan bağlantı kuruluyor...", roomCode = "DIRECT") }
-            val offer = rtcClient.createOffer()
+                val offer = directCallClient.createOffer(audioOnly = false)
             sendOffer(offer)
             _uiState.update { it.copy(statusMessage = "Teklif gönderildi, yanıt bekleniyor...") }
             addCallToHistory(
@@ -2291,16 +2636,75 @@ class VideoCallViewModel(
     fun acceptIncomingCall() {
         val call = _incomingCall.value ?: return
         notificationManager.cancelIncomingCallNotification()
+        stopIncomingCallRingtone() // Çağrı sesini durdur
         _incomingCall.value = null
         
         // Yeni sistem: call-accept mesajı gönder
         signalingClient.acceptCall(call.groupId)
         
-        _uiState.update { it.copy(roomCode = call.roomCode, statusMessage = "Arama kabul edildi") }
+        // Gelen arama için video call varsayılan olarak açık (isAudioOnly = false)
+        // Kullanıcı isterse sonra kapatabilir
+        _uiState.update { 
+            it.copy(
+                isAudioOnly = false, // Video call için
+                isCameraEnabled = true, // Kamera açık
+                localVideoVisible = true // Yerel video görünür
+            ) 
+        }
+        
+        // Room'a bağlan ve WebRTC bağlantısını kur
+        activeRoom = call.roomCode
+        _uiState.update { 
+            it.copy(
+                roomCode = call.roomCode, 
+                statusMessage = "Arama kabul edildi, bağlanılıyor..."
+            ) 
+        }
+        
+        viewModelScope.launch {
+            try {
+                // Room'a bağlan
+                signalingClient.connect(call.roomCode)
+                
+                // Video track'leri başlat (gelen arama için)
+                directCallClient.setVideoEnabled(true)
+                
+                // Gelen arama için answer göndermek için remote offer'ı beklemeliyiz
+                // Backend'den offer gelecek, o zaman answer göndereceğiz
+                _uiState.update { 
+                    it.copy(
+                        statusMessage = "Bağlantı kuruluyor..."
+                    ) 
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("VideoCallViewModel", "Arama kabul hatası", e)
+                _uiState.update { 
+                    it.copy(
+                        statusMessage = "Bağlantı kurulamadı: ${e.message}"
+                    ) 
+                }
+            }
+        }
         
         // Gelen arama geçmişine ekle
+        // Kişi adını önce addedContacts'tan, sonra contacts'tan bul
+        // Backend'den gelen telefon numarası normalize edilmiş (0 ile başlayan) olabilir
+        val normalizedCallerPhone = PhoneNumberUtils.toBackendFormat(call.callerPhoneNumber)
+        val contactName = call.callerName 
+            ?: _addedContacts.value.find { 
+                val normalizedContactPhone = it.phoneNumber?.let { PhoneNumberUtils.toBackendFormat(it) }
+                normalizedContactPhone == normalizedCallerPhone
+            }?.name
+            ?: _contacts.value.find { 
+                val normalizedContactPhone = it.phoneNumber?.let { PhoneNumberUtils.toBackendFormat(it) }
+                normalizedContactPhone == normalizedCallerPhone
+            }?.name
+            ?: call.callerPhoneNumber // Eğer bulunamazsa telefon numarasını göster
+        
+        android.util.Log.d("VideoCallViewModel", "Gelen arama geçmişi: contactName=$contactName, callerPhoneNumber=${call.callerPhoneNumber}, normalized=$normalizedCallerPhone")
+        
         addCallToHistory(
-            contactName = call.callerName,
+            contactName = contactName,
             phoneNumber = call.callerPhoneNumber,
             callType = CallType.INCOMING,
             roomCode = call.roomCode
@@ -2310,6 +2714,7 @@ class VideoCallViewModel(
     fun rejectIncomingCall() {
         val call = _incomingCall.value
         notificationManager.cancelIncomingCallNotification()
+        stopIncomingCallRingtone() // Çağrı sesini durdur
         _incomingCall.value = null
         
         // Yeni sistem: call-reject mesajı gönder
@@ -2322,16 +2727,52 @@ class VideoCallViewModel(
         _uiState.update { it.copy(statusMessage = "Arama reddedildi") }
     }
 
-    private fun handleRemoteOffer(description: SessionDescription) {
+    private fun handleRemoteOffer(sdp: String) {
         viewModelScope.launch {
             runCatching {
-                rtcClient.setRemoteDescription(description)
+                directCallClient.setRemoteDescription(sdp, isOffer = true)
+                
+                // Gelen arama için video track'leri başlat
                 val isAudioOnly = _uiState.value.isAudioOnly
-                val answer = rtcClient.createAnswer(audioOnly = isAudioOnly)
+                if (!isAudioOnly) {
+                    // Video call için video track'leri etkinleştir
+                    directCallClient.setVideoEnabled(true)
+                    _uiState.update { 
+                        it.copy(
+                            isCameraEnabled = true,
+                            localVideoVisible = true
+                        ) 
+                    }
+                }
+                
+                val answer = directCallClient.createAnswer(sdp, audioOnly = isAudioOnly)
                 sendAnswer(answer)
                 _uiState.update { it.copy(statusMessage = "Karşı tarafla eşleştirildi") }
             }.onFailure { error ->
+                android.util.Log.e("VideoCallViewModel", "handleRemoteOffer hatası", error)
                 _uiState.update { it.copy(statusMessage = error.message ?: "Yanıt gönderilemedi") }
+            }
+        }
+    }
+
+    // OTP fonksiyonları kaldırıldı - SMS doğrulama kullanılmıyor
+
+    // FCM Token'ı backend'e gönder
+    private fun sendFCMTokenToBackend() {
+        viewModelScope.launch {
+            try {
+                val firebaseMessaging = com.google.firebase.messaging.FirebaseMessaging.getInstance()
+                firebaseMessaging.token.addOnCompleteListener { task ->
+                    if (task.isSuccessful) {
+                        val token = task.result
+                        android.util.Log.d("VideoCallViewModel", "FCM Token backend'e gönderiliyor")
+                        signalingClient.registerFCMToken(token)
+                    } else {
+                        android.util.Log.e("VideoCallViewModel", "FCM Token alınamadı", task.exception)
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("VideoCallViewModel", "FCM Token hatası", e)
             }
         }
     }
@@ -2343,14 +2784,29 @@ class VideoCallViewModel(
 
     override fun onCleared() {
         super.onCleared()
+        stopIncomingCallRingtone() // Çağrı sesini durdur
+        
+        // Logout mesajı gönder (eğer kayıtlıysa)
+        viewModelScope.launch {
+            try {
+                if (registeredPhoneNumber != null) {
+                    android.util.Log.d("VideoCallViewModel", "👋 Logout mesajı gönderiliyor...")
+                    // Logout mesajı için SignalingMessage'e eklememiz gerekiyor
+                    // Şimdilik sadece bağlantıyı kapatıyoruz
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("VideoCallViewModel", "Logout hatası", e)
+            }
+        }
+        
         localSignalingServer?.stop()
         localSignalingServer = null
         peerSignalingClient.close()
         viewModelScope.launch {
             lastPublishedPresenceHash?.let { presenceRepository.clear(it) }
         }
-        rtcClient.dispose()
-        signalingClient.close()
+        directCallClient.dispose()
+        signalingClient.close() // Bu cleanupConnection'ı tetikleyecek
     }
 
     companion object {
@@ -2362,12 +2818,12 @@ class VideoCallViewModel(
             return object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                    val rtcClient = RtcClient(appContext)
+                    val directCallClient = DirectCallClient(appContext)
                     val signalingClient = SignalingClient(BuildConfig.SIGNALING_URL)
                     val contentResolver = appContext.contentResolver
                     val preferencesManager = PreferencesManager(appContext)
                     val networkManager = NetworkManager(appContext)
-                    return VideoCallViewModel(rtcClient, signalingClient, contentResolver, preferencesManager, networkManager, appContext) as T
+                    return VideoCallViewModel(directCallClient, signalingClient, contentResolver, preferencesManager, networkManager, appContext) as T
                 }
             }
         }
