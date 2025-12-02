@@ -295,9 +295,11 @@ const wss = new WebSocketServer({
 
 wss.on('connection', (ws, req) => {
   // WebSocket bağlantısından IP adresini al
-  const clientIP = req.socket.remoteAddress || 
-                   req.headers['x-forwarded-for']?.split(',')[0]?.trim() || 
+  // Proxy arkasında (Render gibi) x-forwarded-for öncelikli olmalı
+  const clientIP = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || 
                    req.headers['x-real-ip'] || 
+                   req.socket.remoteAddress || 
+                   req.connection?.remoteAddress ||
                    'unknown';
   
   console.log(`[Signaling] Yeni WebSocket bağlantısı: IP=${clientIP}`);
