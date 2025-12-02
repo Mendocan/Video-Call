@@ -69,6 +69,14 @@ class SmsService {
     }
 
     /**
+     * OTP (One-Time Password) gönder - Kayıt doğrulama için
+     */
+    async sendOTP(phoneNumber, otp) {
+        const message = `Video Call doğrulama kodu: ${otp}. Bu kodu kimseyle paylaşmayın. Kod 5 dakika geçerlidir.`;
+        return await this.sendSMS(phoneNumber, message);
+    }
+
+    /**
      * Abonelik yenileme hatırlatıcısı SMS'i
      */
     async sendSubscriptionReminder(phoneNumber, daysUntilExpiry) {

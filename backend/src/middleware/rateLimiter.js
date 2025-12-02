@@ -63,24 +63,26 @@ function checkRateLimit(ip, limitType = 'default') {
   
   // Yeni kayıt oluştur veya mevcut kaydı al
   if (!requestCounts.has(ip)) {
+    const resetTime = now + limit.windowMs;
     requestCounts.set(ip, {
       count: 1,
-      resetTime: now + limit.windowMs,
+      resetTime: resetTime,
       limitType
     });
-    return { allowed: true, remaining: limit.maxRequests - 1 };
+    return { allowed: true, remaining: limit.maxRequests - 1, resetTime: resetTime };
   }
   
   const record = requestCounts.get(ip);
   
   // Limit tipi değişmişse sıfırla
   if (record.limitType !== limitType) {
+    const resetTime = now + limit.windowMs;
     requestCounts.set(ip, {
       count: 1,
-      resetTime: now + limit.windowMs,
+      resetTime: resetTime,
       limitType
     });
-    return { allowed: true, remaining: limit.maxRequests - 1 };
+    return { allowed: true, remaining: limit.maxRequests - 1, resetTime: resetTime };
   }
   
   // Limit aşılmış mı?
@@ -112,18 +114,22 @@ export function rateLimiter(limitType = 'default') {
     const result = checkRateLimit(ip, limitType);
     
     if (!result.allowed) {
-      const resetTime = new Date(result.resetTime).toISOString();
+      const retryAfter = result.resetTime 
+        ? Math.ceil((result.resetTime - Date.now()) / 1000)
+        : 60; // Varsayılan 60 saniye
       return res.status(429).json({
         success: false,
         error: 'Çok fazla istek. Lütfen daha sonra tekrar deneyin.',
-        retryAfter: Math.ceil((result.resetTime - Date.now()) / 1000) // Saniye cinsinden
+        retryAfter: retryAfter
       });
     }
     
     // Rate limit bilgilerini header'a ekle
     res.setHeader('X-RateLimit-Limit', RATE_LIMITS[limitType]?.maxRequests || RATE_LIMITS.default.maxRequests);
     res.setHeader('X-RateLimit-Remaining', result.remaining);
-    res.setHeader('X-RateLimit-Reset', new Date(result.resetTime).toISOString());
+    if (result.resetTime) {
+      res.setHeader('X-RateLimit-Reset', new Date(result.resetTime).toISOString());
+    }
     
     next();
   };

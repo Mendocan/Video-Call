@@ -2,6 +2,8 @@ import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
 import { parse } from 'url';
 import { networkInterfaces } from 'os';
+import pushService from './services/pushService.js';
+// SMS servisi kaldırıldı - SMS doğrulama kullanılmıyor
 
 /**
  * WebRTC Signaling Server
@@ -46,6 +48,8 @@ const userRegistry = new Map();
 
 // WebSocket bağlantısı: ws -> phoneNumber (ters mapping)
 const wsToPhoneNumber = new Map();
+
+// OTP Store kaldırıldı - SMS doğrulama kullanılmıyor
 
 // Grup yönetimi: groupId -> { name, members[], createdBy, createdAt, roomCode }
 const groups = new Map();
@@ -144,6 +148,13 @@ const server = createServer((req, res) => {
         </div>
         
         <div class="endpoint">
+            <strong>Bağlantı Durumu (Test Sayfası)</strong>
+            <code>GET /test</code>
+            <a href="/test" target="_blank">Bağlı Kullanıcıları Gör →</a>
+            <p>Tek telefonla test için: Telefonunuzda uygulamayı açın, bu sayfayı yenileyin, bağlantınızı görün!</p>
+        </div>
+        
+        <div class="endpoint">
             <strong>WebSocket Connection</strong>
             <code>wss://video-call-dyx9.onrender.com/ws</code>
             <p>Android uygulaması bu URL'yi kullanır.</p>
@@ -174,6 +185,64 @@ const server = createServer((req, res) => {
     return;
   }
 
+  // Test sayfası - Bağlı kullanıcıları görmek için
+  if (req.url === '/test' || req.url === '/status') {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    
+    const registeredUsersList = Array.from(userRegistry.keys());
+    const connectionsList = Array.from(connections.values()).map(conn => ({
+      phoneNumber: conn.phoneNumber || 'Kayıtsız',
+      name: conn.name || 'İsimsiz',
+      connectedAt: conn.connectedAt,
+      isRegistered: conn.isRegistered,
+      clientIP: conn.clientIP
+    }));
+    
+    const html = `<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Call - Bağlantı Durumu</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; background: #1a1a1a; color: #fff; }
+        h1 { color: #4CAF50; }
+        .status-card { background: #2d2d2d; border-radius: 8px; padding: 20px; margin: 20px 0; }
+        .stat { display: inline-block; margin: 10px 20px 10px 0; padding: 10px 20px; background: #3d3d3d; border-radius: 4px; }
+        .stat-value { font-size: 24px; font-weight: bold; color: #4CAF50; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #3d3d3d; }
+        th { background: #3d3d3d; color: #4CAF50; }
+        .online { color: #4CAF50; }
+        .refresh-btn { background: #4CAF50; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; }
+    </style>
+    <script>setInterval(() => location.reload(), 5000);</script>
+</head>
+<body>
+    <h1>📱 Video Call - Bağlantı Durumu</h1>
+    <div class="status-card">
+        <h2>📊 Genel Durum</h2>
+        <div class="stat"><div class="stat-value">${connections.size}</div><div>Aktif Bağlantı</div></div>
+        <div class="stat"><div class="stat-value">${userRegistry.size}</div><div>Kayıtlı Kullanıcı</div></div>
+        <div class="stat"><div class="stat-value">${connectionsList.filter(c => c.isRegistered).length}</div><div>Online</div></div>
+        <button class="refresh-btn" onclick="location.reload()">🔄 Yenile</button>
+    </div>
+    <div class="status-card">
+        <h2>👥 Bağlı Kullanıcılar</h2>
+        <table>
+            <tr><th>Telefon</th><th>İsim</th><th>IP</th><th>Durum</th></tr>
+            ${connectionsList.length > 0 ? connectionsList.map(conn => 
+              `<tr><td>${conn.phoneNumber}</td><td>${conn.name}</td><td>${conn.clientIP}</td><td class="${conn.isRegistered ? 'online' : ''}">${conn.isRegistered ? '✅ Online' : '⏳ Bekliyor'}</td></tr>`
+            ).join('') : '<tr><td colspan="4" style="text-align: center;">Henüz bağlı kullanıcı yok</td></tr>'}
+        </table>
+    </div>
+</body>
+</html>`;
+    
+    res.end(html);
+    return;
+  }
+  
   // Health check endpoint
   if (req.url === '/health') {
     let totalParticipants = 0;
@@ -225,7 +294,13 @@ const wss = new WebSocketServer({
 });
 
 wss.on('connection', (ws, req) => {
-  console.log(`[Signaling] Yeni WebSocket bağlantısı`);
+  // WebSocket bağlantısından IP adresini al
+  const clientIP = req.socket.remoteAddress || 
+                   req.headers['x-forwarded-for']?.split(',')[0]?.trim() || 
+                   req.headers['x-real-ip'] || 
+                   'unknown';
+  
+  console.log(`[Signaling] Yeni WebSocket bağlantısı: IP=${clientIP}`);
 
   // Connection bilgilerini kaydet (henüz kayıt olmamış)
   const connectionInfo = {
@@ -235,6 +310,7 @@ wss.on('connection', (ws, req) => {
     name: null,
     connectedAt: new Date(),
     isRegistered: false,
+    clientIP: clientIP, // IP adresini kaydet
     ws
   };
   connections.set(ws, connectionInfo);
@@ -280,6 +356,14 @@ function handleMessage(ws, message) {
   // Register mesajı özel işlenir (kayıt olmadan diğer mesajlar kabul edilmez)
   if (message.type === 'register') {
     handleRegister(ws, message);
+    return;
+  }
+
+  // OTP request mesajı kaldırıldı - SMS doğrulama kullanılmıyor
+
+  // FCM token kaydetme
+  if (message.type === 'register-fcm-token') {
+    handleRegisterFCMToken(ws, message);
     return;
   }
 
@@ -422,6 +506,11 @@ function handleMessage(ws, message) {
       handleUserStatus(ws, message);
       break;
 
+    case 'user-lookup':
+      // Kullanıcı lookup (keşif)
+      handleUserLookup(ws, message);
+      break;
+
     case 'block-user':
       // Kullanıcı engelleme
       handleBlockUser(ws, message);
@@ -546,6 +635,34 @@ function handleDirectChat(ws, message) {
   }
 }
 
+// OTP fonksiyonları kaldırıldı - SMS doğrulama kullanılmıyor
+
+// Telefon numarasını normalize et (backend formatı: 0 ile başlayan)
+function normalizePhoneNumber(phoneNumber) {
+  if (!phoneNumber) return null;
+  
+  // Sadece rakamları al
+  let cleaned = phoneNumber.replace(/\D/g, '');
+  
+  // +90 ile başlıyorsa, +90'ı kaldır ve 0 ekle
+  if (cleaned.startsWith('90') && cleaned.length === 12) {
+    return '0' + cleaned.substring(2);
+  }
+  
+  // 0 ile başlıyorsa olduğu gibi döndür
+  if (cleaned.startsWith('0') && cleaned.length === 11) {
+    return cleaned;
+  }
+  
+  // Diğer durumlarda (10 haneli veya başka format) olduğu gibi döndür
+  // Ama log'a yaz
+  if (cleaned.length > 0 && cleaned.length < 10) {
+    console.warn(`[Signaling] Uyarı: Telefon numarası formatı beklenmeyen: ${phoneNumber} -> ${cleaned}`);
+  }
+  
+  return cleaned;
+}
+
 // Kullanıcı kayıt işleme
 function handleRegister(ws, message) {
   const { phoneNumber, name } = message;
@@ -554,6 +671,16 @@ function handleRegister(ws, message) {
     ws.send(JSON.stringify({ 
       type: 'register-error', 
       message: 'phoneNumber is required' 
+    }));
+    return;
+  }
+
+  // Telefon numarasını normalize et
+  const normalizedPhoneNumber = normalizePhoneNumber(phoneNumber);
+  if (!normalizedPhoneNumber) {
+    ws.send(JSON.stringify({ 
+      type: 'register-error', 
+      message: 'Invalid phone number format' 
     }));
     return;
   }
@@ -568,40 +695,75 @@ function handleRegister(ws, message) {
   }
 
   // Eğer bu telefon numarası zaten kayıtlıysa, eski bağlantıyı kapat
-  const existingUser = userRegistry.get(phoneNumber);
+  const existingUser = userRegistry.get(normalizedPhoneNumber);
   if (existingUser && existingUser.ws !== ws && existingUser.ws.readyState === 1) {
-    console.log(`[Signaling] Telefon numarası ${phoneNumber} zaten kayıtlı, eski bağlantı kapatılıyor`);
+    console.log(`[Signaling] Telefon numarası ${normalizedPhoneNumber} zaten kayıtlı, eski bağlantı kapatılıyor`);
     existingUser.ws.close(1000, 'New registration from same phone number');
     cleanupConnection(existingUser.ws);
   }
 
-  // Kullanıcıyı kaydet
+  // Kullanıcıyı kaydet (IP adresi ile birlikte)
   const userInfo = {
     ws,
-    phoneNumber,
+    phoneNumber: normalizedPhoneNumber, // Normalize edilmiş telefon numarasını kullan
     name: name || null,
+    clientIP: connectionInfo.clientIP, // IP adresini ekle
     connectedAt: new Date(),
     lastSeen: new Date()
   };
   
-  userRegistry.set(phoneNumber, userInfo);
-  wsToPhoneNumber.set(ws, phoneNumber);
+  userRegistry.set(normalizedPhoneNumber, userInfo);
+  wsToPhoneNumber.set(ws, normalizedPhoneNumber);
   
   // Connection bilgilerini güncelle
-  connectionInfo.phoneNumber = phoneNumber;
+  connectionInfo.phoneNumber = normalizedPhoneNumber;
   connectionInfo.name = name || null;
   connectionInfo.isRegistered = true;
   connectionInfo.participantId = `participant_${Date.now()}`;
 
-  console.log(`[Signaling] Kullanıcı kaydedildi: phoneNumber=${phoneNumber}, name=${name || 'N/A'}`);
+  console.log(`[Signaling] Kullanıcı kaydedildi: phoneNumber=${normalizedPhoneNumber} (original: ${phoneNumber}), name=${name || 'N/A'}, IP=${userInfo.clientIP}`);
+  console.log(`[Signaling] Kayıtlı kullanıcılar:`, Array.from(userRegistry.keys()));
 
   // Başarı mesajı gönder
   ws.send(JSON.stringify({
     type: 'registered',
-    phoneNumber: phoneNumber,
+    phoneNumber: normalizedPhoneNumber,
     name: name || null,
     timestamp: new Date().toISOString()
   }));
+}
+
+// FCM Token kaydetme
+function handleRegisterFCMToken(ws, message) {
+  const connectionInfo = connections.get(ws);
+  if (!connectionInfo || !connectionInfo.isRegistered) {
+    ws.send(JSON.stringify({ 
+      type: 'fcm-token-error', 
+      message: 'Please register first' 
+    }));
+    return;
+  }
+
+  const { fcmToken } = message;
+  const phoneNumber = connectionInfo.phoneNumber;
+  
+  if (!fcmToken) {
+    ws.send(JSON.stringify({ 
+      type: 'fcm-token-error', 
+      message: 'fcmToken is required' 
+    }));
+    return;
+  }
+
+  pushService.registerFCMToken(phoneNumber, fcmToken);
+  
+  ws.send(JSON.stringify({
+    type: 'fcm-token-registered',
+    phoneNumber: phoneNumber,
+    timestamp: new Date().toISOString()
+  }));
+  
+  console.log(`[Signaling] FCM Token kaydedildi: phoneNumber=${phoneNumber}`);
 }
 
 // Grup ID oluşturma
@@ -983,9 +1145,10 @@ function handleCallRequest(ws, message) {
 
   const { targetPhoneNumber, groupId, callerPhoneNumber, callerName } = message;
   const callerPhone = callerPhoneNumber || connectionInfo.phoneNumber;
-  const callerNameValue = callerName || connectionInfo.name;
+  // callerName için daha iyi fallback: connectionInfo.name veya callerPhone
+  const callerNameValue = callerName || connectionInfo.name || callerPhone;
   
-  console.log(`[Signaling] call-request işleniyor: caller=${callerPhone}, target=${targetPhoneNumber}, groupId=${groupId}`);
+  console.log(`[Signaling] call-request işleniyor: caller=${callerPhone}, callerName=${callerNameValue}, target=${targetPhoneNumber}, groupId=${groupId}`);
 
   // Grup araması mı, bireysel arama mı?
   if (groupId) {
@@ -1004,54 +1167,93 @@ function handleCallRequest(ws, message) {
     return;
   }
 
-  // Engellenenler kontrolü: Arayan, aranan tarafından engellenmiş mi?
-  const targetBlockedList = blockedUsers.get(targetPhoneNumber);
-  if (targetBlockedList && targetBlockedList.has(callerPhone)) {
-    console.log(`[Signaling] call-request reddedildi: ${callerPhone} -> ${targetPhoneNumber} engellenmiş`);
-    ws.send(JSON.stringify({
-      type: 'call-error',
-      reason: 'You are blocked by this user',
+  // Telefon numaralarını normalize et
+  const normalizedTargetPhoneNumber = normalizePhoneNumber(targetPhoneNumber);
+  const normalizedCallerPhone = normalizePhoneNumber(callerPhone);
+  
+  if (!normalizedTargetPhoneNumber) {
+    console.log(`[Signaling] call-request reddedildi: Geçersiz telefon numarası formatı: ${targetPhoneNumber}`);
+    ws.send(JSON.stringify({ 
+      type: 'call-error', 
+      reason: 'Invalid phone number format',
       targetPhoneNumber: targetPhoneNumber
     }));
     return;
   }
 
-  // Hedef kullanıcıyı bul
-  const targetUser = userRegistry.get(targetPhoneNumber);
+  console.log(`[Signaling] Arama isteği: caller=${normalizedCallerPhone} (original: ${callerPhone}), target=${normalizedTargetPhoneNumber} (original: ${targetPhoneNumber})`);
+
+  // Engellenenler kontrolü: Arayan, aranan tarafından engellenmiş mi?
+  const targetBlockedList = blockedUsers.get(normalizedTargetPhoneNumber);
+  if (targetBlockedList && targetBlockedList.has(normalizedCallerPhone)) {
+    console.log(`[Signaling] call-request reddedildi: ${normalizedCallerPhone} -> ${normalizedTargetPhoneNumber} engellenmiş`);
+    ws.send(JSON.stringify({
+      type: 'call-error',
+      reason: 'You are blocked by this user',
+      targetPhoneNumber: normalizedTargetPhoneNumber
+    }));
+    return;
+  }
+
+  // Hedef kullanıcıyı bul (normalize edilmiş telefon numarası ile)
+  const targetUser = userRegistry.get(normalizedTargetPhoneNumber);
   
   if (!targetUser) {
-    console.log(`[Signaling] call-request reddedildi: ${targetPhoneNumber} kayıtlı değil veya offline`);
-    console.log(`[Signaling] Kayıtlı kullanıcılar:`, Array.from(userRegistry.keys()));
+    console.log(`[Signaling] call-request reddedildi: ${normalizedTargetPhoneNumber} kayıtlı değil veya offline (original: ${targetPhoneNumber})`);
+    console.log(`[Signaling] Kayıtlı kullanıcılar (${userRegistry.size} adet):`, Array.from(userRegistry.keys()));
+    console.log(`[Signaling] Arayan kullanıcı: ${normalizedCallerPhone} (original: ${callerPhone})`);
+    console.log(`[Signaling] Arayan kullanıcı kayıtlı mı? ${userRegistry.has(normalizedCallerPhone)}`);
+    
+    // Offline kullanıcı için push notification gönder
+    if (pushService.isInitialized() && pushService.hasFCMToken(normalizedTargetPhoneNumber)) {
+      console.log(`[Signaling] Offline kullanıcı için push notification gönderiliyor: ${normalizedTargetPhoneNumber}`);
+      pushService.sendIncomingCallNotification(
+        normalizedTargetPhoneNumber,
+        normalizedCallerPhone,
+        callerNameValue
+      ).then(result => {
+        if (result.success) {
+          console.log(`[Signaling] Push notification gönderildi: ${targetPhoneNumber}`);
+          // Offline call queue'ya ekle (gelecekte kullanılabilir)
+          // addToOfflineCallQueue(targetPhoneNumber, { callerPhone, callerName: callerNameValue });
+        } else {
+          console.log(`[Signaling] Push notification gönderilemedi: ${result.error}`);
+        }
+      });
+    }
+    
     ws.send(JSON.stringify({
       type: 'call-error',
       reason: 'User not found or offline',
-      targetPhoneNumber: targetPhoneNumber
+      targetPhoneNumber: normalizedTargetPhoneNumber
     }));
     return;
   }
 
   // Hedef kullanıcı online mı?
   if (targetUser.ws.readyState !== 1) {
-    console.log(`[Signaling] call-request reddedildi: ${targetPhoneNumber} WebSocket durumu: ${targetUser.ws.readyState} (1=OPEN)`);
+    console.log(`[Signaling] call-request reddedildi: ${normalizedTargetPhoneNumber} WebSocket durumu: ${targetUser.ws.readyState} (1=OPEN)`);
     ws.send(JSON.stringify({
       type: 'call-error',
       reason: 'User is offline',
-      targetPhoneNumber: targetPhoneNumber
+      targetPhoneNumber: normalizedTargetPhoneNumber
     }));
     return;
   }
   
-  console.log(`[Signaling] Hedef kullanıcı bulundu: ${targetPhoneNumber}, WebSocket durumu: ${targetUser.ws.readyState}`);
+  console.log(`[Signaling] Hedef kullanıcı bulundu: ${normalizedTargetPhoneNumber} (original: ${targetPhoneNumber}), IP=${targetUser.clientIP}, WebSocket durumu: ${targetUser.ws.readyState}`);
 
   // Bireysel görüşme için geçici grup oluştur (2 kişilik)
   const tempGroupId = generateGroupId();
   const roomCode = generateRoomCode();
   
+  // ÖNEMLİ: members array'ine normalize edilmiş telefon numaralarını ekle
+  // Aksi halde handleCallAccept'te userRegistry.get() eşleşmesi yapılamaz
   const tempGroupInfo = {
     groupId: tempGroupId,
-    name: `${callerNameValue || callerPhone} - ${targetUser.name || targetPhoneNumber}`,
-    members: [callerPhone, targetPhoneNumber],
-    createdBy: callerPhone,
+    name: `${callerNameValue || normalizedCallerPhone} - ${targetUser.name || normalizedTargetPhoneNumber}`,
+    members: [normalizedCallerPhone, normalizedTargetPhoneNumber], // Normalize edilmiş telefon numaraları
+    createdBy: normalizedCallerPhone, // Normalize edilmiş telefon numarası
     createdAt: new Date(),
     roomCode: roomCode,
     isTemporary: true // Bireysel görüşme için geçici grup
@@ -1059,8 +1261,8 @@ function handleCallRequest(ws, message) {
 
   groups.set(tempGroupId, tempGroupInfo);
 
-  // Her iki kullanıcıyı da userGroups'a ekle
-  [callerPhone, targetPhoneNumber].forEach(phoneNumber => {
+  // Her iki kullanıcıyı da userGroups'a ekle (normalize edilmiş telefon numaraları ile)
+  [normalizedCallerPhone, normalizedTargetPhoneNumber].forEach(phoneNumber => {
     if (!userGroups.has(phoneNumber)) {
       userGroups.set(phoneNumber, new Set());
     }
@@ -1073,22 +1275,27 @@ function handleCallRequest(ws, message) {
     participants.set(roomCode, []);
   }
 
-  console.log(`[Signaling] Bireysel arama başlatıldı: caller=${callerPhone}, target=${targetPhoneNumber}, groupId=${tempGroupId}`);
+  console.log(`[Signaling] Bireysel arama başlatıldı: caller=${normalizedCallerPhone} (original: ${callerPhone}), target=${normalizedTargetPhoneNumber} (original: ${targetPhoneNumber}), groupId=${tempGroupId}, callerName=${callerNameValue}`);
 
   // Hedef kullanıcıya gelen arama bildirimi gönder
   try {
+    // callerName için daha iyi fallback: targetUser'ın addedContacts'ında arayan kişiyi bul
+    // Şimdilik connectionInfo.name veya callerNameValue kullan
+    const finalCallerName = callerNameValue || connectionInfo.name || normalizedCallerPhone;
+    
     const incomingCallMessage = JSON.stringify({
       type: 'incoming-call',
       groupId: tempGroupId,
       roomCode: roomCode,
-      callerPhoneNumber: callerPhone,
-      callerName: callerNameValue,
+      callerPhoneNumber: normalizedCallerPhone, // Normalize edilmiş telefon numarası
+      callerName: finalCallerName, // Null olmayan isim
       isGroupCall: false,
       timestamp: new Date().toISOString()
     });
     console.log(`[Signaling] incoming-call mesajı gönderiliyor: ${incomingCallMessage}`);
+    console.log(`[Signaling] callerName: ${finalCallerName}, callerPhoneNumber: ${normalizedCallerPhone} (original: ${callerPhone})`);
     targetUser.ws.send(incomingCallMessage);
-    console.log(`[Signaling] incoming-call mesajı gönderildi: ${targetPhoneNumber}`);
+    console.log(`[Signaling] incoming-call mesajı gönderildi: ${normalizedTargetPhoneNumber} (original: ${targetPhoneNumber})`);
   } catch (error) {
     console.error(`[Signaling] incoming-call mesajı gönderilemedi:`, error);
     ws.send(JSON.stringify({
@@ -1104,7 +1311,7 @@ function handleCallRequest(ws, message) {
     type: 'call-request-sent',
     groupId: tempGroupId,
     roomCode: roomCode,
-    targetPhoneNumber: targetPhoneNumber,
+    targetPhoneNumber: normalizedTargetPhoneNumber, // Normalize edilmiş telefon numarası
     timestamp: new Date().toISOString()
   }));
 }
@@ -1238,18 +1445,25 @@ function handleCallAccept(ws, message) {
   }));
 
   // Diğer grup üyelerine bildir
+  // ÖNEMLİ: groupInfo.members artık normalize edilmiş telefon numaraları içeriyor
   groupInfo.members.forEach(memberPhone => {
+    // memberPhone zaten normalize edilmiş (0 ile başlayan format)
     if (memberPhone !== phoneNumber) {
       const memberUser = userRegistry.get(memberPhone);
       if (memberUser && memberUser.ws.readyState === 1) {
+        // name için fallback: connectionInfo.name veya phoneNumber
+        const memberName = connectionInfo.name || phoneNumber;
+        console.log(`[Signaling] call-accepted-by gönderiliyor: memberPhone=${memberPhone}, phoneNumber=${phoneNumber}, name=${memberName}`);
         memberUser.ws.send(JSON.stringify({
           type: 'call-accepted-by',
           groupId: groupId,
           roomCode: roomCode,
           phoneNumber: phoneNumber,
-          name: connectionInfo.name,
+          name: memberName,
           timestamp: new Date().toISOString()
         }));
+      } else {
+        console.log(`[Signaling] call-accepted-by gönderilemedi: memberPhone=${memberPhone} bulunamadı veya offline (userRegistry.has=${userRegistry.has(memberPhone)}, readyState=${memberUser?.ws?.readyState})`);
       }
     }
   });
@@ -1361,6 +1575,51 @@ function handleUserStatus(ws, message) {
     lastSeen: userInfo.lastSeen.toISOString(),
     connectedAt: userInfo.connectedAt.toISOString()
   }));
+}
+
+// Kullanıcı lookup (keşif) - "Bu numara kayıtlı mı?" kontrolü
+function handleUserLookup(ws, message) {
+  const connectionInfo = connections.get(ws);
+  if (!connectionInfo || !connectionInfo.isRegistered) {
+    ws.send(JSON.stringify({ 
+      type: 'lookup-error', 
+      message: 'Please register first' 
+    }));
+    return;
+  }
+
+  const { phoneNumber } = message;
+  if (!phoneNumber) {
+    ws.send(JSON.stringify({ 
+      type: 'lookup-error', 
+      message: 'phoneNumber is required' 
+    }));
+    return;
+  }
+
+  const userInfo = userRegistry.get(phoneNumber);
+  
+  if (userInfo) {
+    // Kullanıcı bulundu
+    const isOnline = userInfo.ws.readyState === 1;
+    ws.send(JSON.stringify({
+      type: 'user-lookup',
+      phoneNumber: phoneNumber,
+      isRegistered: true,
+      name: userInfo.name,
+      isOnline: isOnline,
+      lastSeen: userInfo.lastSeen.toISOString()
+    }));
+    console.log(`[Signaling] Kullanıcı lookup: ${phoneNumber} -> Kayıtlı (online: ${isOnline})`);
+  } else {
+    // Kullanıcı bulunamadı
+    ws.send(JSON.stringify({
+      type: 'user-lookup',
+      phoneNumber: phoneNumber,
+      isRegistered: false
+    }));
+    console.log(`[Signaling] Kullanıcı lookup: ${phoneNumber} -> Kayıtlı değil`);
+  }
 }
 
 // Kullanıcı engelleme
