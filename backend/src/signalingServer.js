@@ -702,6 +702,9 @@ function normalizePhoneNumber(phoneNumber) {
   // Sadece rakamları al
   let cleaned = phoneNumber.replace(/\D/g, '');
   
+  // Boşsa null döndür
+  if (cleaned.length === 0) return null;
+  
   // +90 ile başlıyorsa, +90'ı kaldır ve 0 ekle
   if (cleaned.startsWith('90') && cleaned.length === 12) {
     return '0' + cleaned.substring(2);
@@ -712,6 +715,11 @@ function normalizePhoneNumber(phoneNumber) {
     return cleaned;
   }
   
+  // 10 haneli numara ise (0 olmadan), başına 0 ekle
+  if (cleaned.length === 10) {
+    return '0' + cleaned;
+  }
+  
   // Diğer durumlarda (10 haneli veya başka format) olduğu gibi döndür
   // Ama log'a yaz
   if (cleaned.length > 0 && cleaned.length < 10) {
@@ -719,6 +727,90 @@ function normalizePhoneNumber(phoneNumber) {
   }
   
   return cleaned;
+}
+
+// Telefon numarası için tüm olası formatları oluştur
+function generatePhoneNumberVariants(phoneNumber) {
+  if (!phoneNumber) return [];
+  
+  const variants = new Set();
+  
+  // Orijinal numara
+  variants.add(phoneNumber);
+  
+  // Sadece rakamlar
+  const digitsOnly = phoneNumber.replace(/\D/g, '');
+  if (digitsOnly) variants.add(digitsOnly);
+  
+  // Normalize edilmiş versiyon
+  const normalized = normalizePhoneNumber(phoneNumber);
+  if (normalized) variants.add(normalized);
+  
+  // 0 ile başlayan versiyon
+  if (digitsOnly && !digitsOnly.startsWith('0') && digitsOnly.length === 10) {
+    variants.add('0' + digitsOnly);
+  }
+  
+  // 0 olmadan versiyon
+  if (digitsOnly && digitsOnly.startsWith('0') && digitsOnly.length === 11) {
+    variants.add(digitsOnly.substring(1));
+  }
+  
+  // +90 ile başlayan versiyon
+  if (digitsOnly && !digitsOnly.startsWith('90') && digitsOnly.length === 10) {
+    variants.add('90' + digitsOnly);
+  }
+  
+  // +90 olmadan versiyon
+  if (digitsOnly && digitsOnly.startsWith('90') && digitsOnly.length === 12) {
+    variants.add(digitsOnly.substring(2));
+  }
+  
+  return Array.from(variants).filter(v => v && v.length > 0);
+}
+
+// userRegistry'de telefon numarası ara (fuzzy matching)
+function findUserByPhoneNumber(targetPhoneNumber) {
+  if (!targetPhoneNumber) return null;
+  
+  // Önce normalize edilmiş numara ile direkt arama
+  const normalized = normalizePhoneNumber(targetPhoneNumber);
+  if (normalized && userRegistry.has(normalized)) {
+    return userRegistry.get(normalized);
+  }
+  
+  // Tüm olası formatları oluştur
+  const variants = generatePhoneNumberVariants(targetPhoneNumber);
+  
+  // Her variant için ara
+  for (const variant of variants) {
+    const normalizedVariant = normalizePhoneNumber(variant);
+    if (normalizedVariant && userRegistry.has(normalizedVariant)) {
+      console.log(`[Signaling] ✅ Variant ile bulundu: ${variant} -> ${normalizedVariant}`);
+      return userRegistry.get(normalizedVariant);
+    }
+  }
+  
+  // Eğer hala bulunamadıysa, userRegistry'deki tüm numaraları tara
+  // Bu, normalize edilmiş numaraların son 10 hanesini karşılaştırır
+  const targetDigits = normalizePhoneNumber(targetPhoneNumber);
+  if (targetDigits && targetDigits.length >= 10) {
+    const targetLast10 = targetDigits.slice(-10); // Son 10 hane
+    
+    for (const [registeredPhone, userInfo] of userRegistry.entries()) {
+      if (!registeredPhone || registeredPhone.length < 10) continue;
+      
+      const registeredLast10 = registeredPhone.slice(-10); // Son 10 hane
+      
+      // Son 10 hane eşleşiyorsa
+      if (targetLast10 === registeredLast10) {
+        console.log(`[Signaling] ✅ Son 10 hane eşleşmesi ile bulundu: ${targetPhoneNumber} -> ${registeredPhone}`);
+        return userInfo;
+      }
+    }
+  }
+  
+  return null;
 }
 
 // Kullanıcı kayıt işleme
@@ -1284,28 +1376,23 @@ function handleCallRequest(ws, message) {
     return;
   }
 
-  // Hedef kullanıcıyı bul (normalize edilmiş telefon numarası ile)
-  let targetUser = userRegistry.get(normalizedTargetPhoneNumber);
+  // Hedef kullanıcıyı bul (gelişmiş arama mekanizması ile)
+  let targetUser = findUserByPhoneNumber(targetPhoneNumber);
   
-  // Eğer normalize edilmiş numara ile bulunamadıysa, alternatif formatları dene
   if (!targetUser) {
-    console.log(`[Signaling] ⚠️ Normalize edilmiş numara ile bulunamadı: ${normalizedTargetPhoneNumber}`);
+    console.log(`[Signaling] ⚠️ Normalize edilmiş numara ile bulunamadı: ${normalizedTargetPhoneNumber} (original: ${targetPhoneNumber})`);
+    console.log(`[Signaling] 🔍 Tüm olası formatlar deneniyor...`);
     
-    // Alternatif formatları dene
-    const alternativeFormats = [
-      targetPhoneNumber.replace(/\D/g, ''), // Sadece rakamlar
-      targetPhoneNumber.startsWith('0') ? targetPhoneNumber.substring(1) : '0' + targetPhoneNumber, // 0 ekle/çıkar
-      targetPhoneNumber.startsWith('+90') ? '0' + targetPhoneNumber.substring(3) : null, // +90 formatı
-    ].filter(f => f && f !== normalizedTargetPhoneNumber);
+    // Detaylı debug log
+    console.log(`[Signaling] 📋 Kayıtlı kullanıcılar (${userRegistry.size} adet):`, Array.from(userRegistry.keys()));
+    console.log(`[Signaling] 🎯 Aranan numara: ${targetPhoneNumber}`);
+    console.log(`[Signaling] 🔢 Normalize edilmiş: ${normalizedTargetPhoneNumber}`);
     
-    for (const altFormat of alternativeFormats) {
-      const altNormalized = normalizePhoneNumber(altFormat);
-      if (altNormalized && userRegistry.has(altNormalized)) {
-        targetUser = userRegistry.get(altNormalized);
-        console.log(`[Signaling] ✅ Alternatif format ile bulundu: ${altFormat} -> ${altNormalized}`);
-        break;
-      }
-    }
+    // Tüm variant'ları logla
+    const variants = generatePhoneNumberVariants(targetPhoneNumber);
+    console.log(`[Signaling] 🔄 Oluşturulan variant'lar:`, variants);
+  } else {
+    console.log(`[Signaling] ✅ Kullanıcı bulundu: ${targetUser.phoneNumber} (aranan: ${targetPhoneNumber})`);
   }
   
   if (!targetUser) {
