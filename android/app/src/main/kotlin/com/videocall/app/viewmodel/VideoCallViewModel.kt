@@ -86,6 +86,9 @@ class VideoCallViewModel(
     
     // Kayıtlı telefon numarası (reconnect için)
     private var registeredPhoneNumber: String? = null
+    
+    // Register işlemi devam ediyor mu? (duplicate çağrıları önlemek için)
+    private var isRegistering: Boolean = false
 
     private val _uiState = MutableStateFlow(CallUiState())
     val uiState: StateFlow<CallUiState> = _uiState.asStateFlow()
@@ -184,6 +187,9 @@ class VideoCallViewModel(
     
     // Çağrı sesi (ringtone)
     private var incomingCallRingtone: Ringtone? = null
+    
+    // Ringback tone (erişim sesi - arayan kişi duyar)
+    private var ringbackTone: Ringtone? = null
 
     // handleIncomingCall fonksiyonunu ekle
     private fun handleIncomingCall(message: SignalingMessage.IncomingCall) {
@@ -254,6 +260,34 @@ class VideoCallViewModel(
             android.util.Log.d("VideoCallViewModel", "Çağrı sesi durduruldu")
         } catch (e: Exception) {
             android.util.Log.e("VideoCallViewModel", "Çağrı sesi durdurulamadı", e)
+        }
+    }
+    
+    // Ringback tone başlat (erişim sesi - arayan kişi duyar)
+    private fun startRingbackTone() {
+        try {
+            // Önceki ringback tone'u durdur
+            stopRingbackTone()
+            
+            // Sistem ringtone'unu al
+            val ringtoneUri: Uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+            ringbackTone = RingtoneManager.getRingtone(context, ringtoneUri)
+            ringbackTone?.isLooping = true // Sürekli çal
+            ringbackTone?.play()
+            android.util.Log.d("VideoCallViewModel", "Ringback tone başlatıldı")
+        } catch (e: Exception) {
+            android.util.Log.e("VideoCallViewModel", "Ringback tone çalınamadı", e)
+        }
+    }
+    
+    // Ringback tone durdur
+    private fun stopRingbackTone() {
+        try {
+            ringbackTone?.stop()
+            ringbackTone = null
+            android.util.Log.d("VideoCallViewModel", "Ringback tone durduruldu")
+        } catch (e: Exception) {
+            android.util.Log.e("VideoCallViewModel", "Ringback tone durdurulamadı", e)
         }
     }
 
@@ -350,47 +384,62 @@ class VideoCallViewModel(
      * Telefon numarası varsa ve kayıtlı değilse kayıt yapar
      */
     fun registerToBackend() {
+        // Duplicate çağrıları önle
+        if (isRegistering) {
+            android.util.Log.d("VideoCallViewModel", "⏸️ Register işlemi zaten devam ediyor, duplicate çağrı atlandı")
+            return
+        }
+        
         viewModelScope.launch {
-            val phoneNumber = preferencesManager.getPhoneNumber()
-            if (phoneNumber != null && phoneNumber.isNotBlank()) {
-                val name = _addedContacts.value.find { it.phoneNumber == phoneNumber }?.name
-                try {
-                    // Telefon numarasını backend formatına çevir (0 ile başlayan format)
-                    val normalizedPhoneNumber = PhoneNumberUtils.toBackendFormat(phoneNumber)
-                    // Kayıtlı telefon numarasını sakla (reconnect için)
-                    registeredPhoneNumber = normalizedPhoneNumber
-                    android.util.Log.d("VideoCallViewModel", "📞 Kullanıcı kaydı başlatılıyor: phoneNumber=$normalizedPhoneNumber (original: $phoneNumber), name=$name")
-                    
-                    // WebSocket bağlantısını kontrol et ve gerekirse bekle
-                    val currentStatus = signalingClient.status.value
-                    if (currentStatus !is SignalingStatus.Connected) {
-                        android.util.Log.d("VideoCallViewModel", "⏳ WebSocket bağlantısı kuruluyor...")
-                        signalingClient.connect()
-                        // Bağlantının kurulmasını bekle (max 5 saniye)
-                        var waitCount = 0
-                        while (signalingClient.status.value !is SignalingStatus.Connected && waitCount < 50) {
-                            delay(100)
-                            waitCount++
+            isRegistering = true
+            try {
+                val phoneNumber = preferencesManager.getPhoneNumber()
+                if (phoneNumber != null && phoneNumber.isNotBlank()) {
+                    val name = _addedContacts.value.find { it.phoneNumber == phoneNumber }?.name
+                    try {
+                        // Telefon numarasını backend formatına çevir (0 ile başlayan format)
+                        val normalizedPhoneNumber = PhoneNumberUtils.toBackendFormat(phoneNumber)
+                        // Kayıtlı telefon numarasını sakla (reconnect için)
+                        registeredPhoneNumber = normalizedPhoneNumber
+                        android.util.Log.d("VideoCallViewModel", "📞 Kullanıcı kaydı başlatılıyor: phoneNumber=$normalizedPhoneNumber (original: $phoneNumber), name=$name")
+                        
+                        // WebSocket bağlantısını kontrol et ve gerekirse bekle
+                        val currentStatus = signalingClient.status.value
+                        if (currentStatus !is SignalingStatus.Connected) {
+                            android.util.Log.d("VideoCallViewModel", "⏳ WebSocket bağlantısı kuruluyor...")
+                            signalingClient.connect()
+                            // Bağlantının kurulmasını bekle (max 5 saniye) - async olarak
+                            var waitCount = 0
+                            while (signalingClient.status.value !is SignalingStatus.Connected && waitCount < 50) {
+                                delay(100)
+                                waitCount++
+                                // Main thread'i bloklamamak için yield
+                                kotlinx.coroutines.yield()
+                            }
+                            if (signalingClient.status.value !is SignalingStatus.Connected) {
+                                android.util.Log.e("VideoCallViewModel", "❌ WebSocket bağlantısı kurulamadı")
+                                _uiState.update { it.copy(statusMessage = "Sunucuya bağlanılamadı") }
+                                isRegistering = false
+                                return@launch
+                            }
                         }
-                        if (signalingClient.status.value !is SignalingStatus.Connected) {
-                            android.util.Log.e("VideoCallViewModel", "❌ WebSocket bağlantısı kurulamadı")
-                            _uiState.update { it.copy(statusMessage = "Sunucuya bağlanılamadı") }
-                            return@launch
-                        }
+                        
+                        android.util.Log.d("VideoCallViewModel", "✅ WebSocket bağlantısı hazır, register mesajı gönderiliyor...")
+                        signalingClient.register(normalizedPhoneNumber, name)
+                        // Reconnect'i etkinleştir
+                        signalingClient.enableReconnect()
+                        android.util.Log.d("VideoCallViewModel", "✅ Kullanıcı kaydı mesajı gönderildi")
+                        _uiState.update { it.copy(statusMessage = "Sunucuya bağlandı") }
+                    } catch (e: Exception) {
+                        android.util.Log.e("VideoCallViewModel", "❌ Kayıt hatası", e)
+                        _uiState.update { it.copy(statusMessage = "Sunucuya bağlanılamadı: ${e.message}") }
                     }
-                    
-                    android.util.Log.d("VideoCallViewModel", "✅ WebSocket bağlantısı hazır, register mesajı gönderiliyor...")
-                    signalingClient.register(normalizedPhoneNumber, name)
-                    // Reconnect'i etkinleştir
-                    signalingClient.enableReconnect()
-                    android.util.Log.d("VideoCallViewModel", "✅ Kullanıcı kaydı mesajı gönderildi")
-                } catch (e: Exception) {
-                    android.util.Log.e("VideoCallViewModel", "❌ Kayıt hatası", e)
-                    _uiState.update { it.copy(statusMessage = "Sunucuya bağlanılamadı: ${e.message}") }
+                } else {
+                    android.util.Log.w("VideoCallViewModel", "⚠️ Telefon numarası kayıtlı değil, otomatik kayıt yapılamadı")
+                    _uiState.update { it.copy(statusMessage = "Telefon numaranızı kaydedin (Ayarlar)") }
                 }
-            } else {
-                android.util.Log.w("VideoCallViewModel", "⚠️ Telefon numarası kayıtlı değil, otomatik kayıt yapılamadı")
-                _uiState.update { it.copy(statusMessage = "Telefon numaranızı kaydedin (Ayarlar)") }
+            } finally {
+                isRegistering = false
             }
         }
     }
@@ -2333,10 +2382,13 @@ class VideoCallViewModel(
             is SignalingMessage.Error -> {
                 // "Please register first" mesajını Türkçe'ye çevir ve otomatik kayıt yap
                 val errorMessage = message.reason
-                if (errorMessage.contains("register", ignoreCase = true)) {
+                if (errorMessage.contains("register", ignoreCase = true) && !isRegistering) {
                     android.util.Log.w("VideoCallViewModel", "Kayıt hatası: $errorMessage, otomatik kayıt yapılıyor...")
-                    // Otomatik kayıt yap
-                    registerToBackend()
+                    // Otomatik kayıt yap (sadece zaten register olmuyorsa)
+                    viewModelScope.launch {
+                        delay(500) // Kısa bir gecikme ile duplicate çağrıları önle
+                        registerToBackend()
+                    }
                     _uiState.update { it.copy(statusMessage = "Sunucuya bağlanılıyor...") }
                 } else {
                     _uiState.update { it.copy(statusMessage = errorMessage) }
@@ -2780,6 +2832,57 @@ class VideoCallViewModel(
     private fun generateRoomCode(): String {
         return BuildConfig.APPLICATION_ID.takeLast(4).uppercase(Locale.getDefault()) +
             System.currentTimeMillis().toString(16).takeLast(4).uppercase(Locale.getDefault())
+    }
+
+    fun logout() {
+        android.util.Log.d("VideoCallViewModel", "👋 Kullanıcı çıkış yapıyor...")
+        
+        // Çağrı sesini durdur
+        stopIncomingCallRingtone()
+        
+        // Backend'e logout mesajı gönder ve bağlantıları kapat
+        viewModelScope.launch {
+            try {
+                // SignalingClient üzerinden logout mesajı gönder (backend'e bildir)
+                signalingClient.logout()
+                // logout() fonksiyonu mesajı gönderip bağlantıyı kapatacak
+            } catch (e: Exception) {
+                android.util.Log.e("VideoCallViewModel", "Logout hatası", e)
+                // Hata olsa bile bağlantıyı kapat
+                signalingClient.close()
+            }
+        }
+        
+        // Diğer bağlantıları temizle
+        localSignalingServer?.stop()
+        localSignalingServer = null
+        peerSignalingClient.close()
+        viewModelScope.launch {
+            lastPublishedPresenceHash?.let { presenceRepository.clear(it) }
+        }
+        directCallClient.dispose()
+        
+        // Kayıtlı bilgileri temizle
+        registeredPhoneNumber = null
+        
+        // Telefon numarasını temizle (çıkış yapıldığı için)
+        val preferencesManager = PreferencesManager(context)
+        preferencesManager.savePhoneNumber("")
+        // setFirstLaunchCompleted() parametre almıyor, sadece çağrılıyor
+        preferencesManager.setTermsAccepted(false)
+        
+        // UI state'i sıfırla
+        _uiState.update {
+            CallUiState(
+                isConnected = false,
+                statusMessage = "Çıkış yapıldı",
+                isMicEnabled = false,
+                isCameraEnabled = false,
+                isAudioOnly = false
+            )
+        }
+        
+        android.util.Log.d("VideoCallViewModel", "✅ Çıkış işlemi tamamlandı")
     }
 
     override fun onCleared() {

@@ -1412,6 +1412,14 @@ function handleCallRequest(ws, message) {
     console.log(`[Signaling] callerName: ${finalCallerName}, callerPhoneNumber: ${normalizedCallerPhone} (original: ${callerPhone})`);
     targetUser.ws.send(incomingCallMessage);
     console.log(`[Signaling] incoming-call mesajı gönderildi: ${normalizedTargetPhoneNumber} (original: ${targetPhoneNumber})`);
+    
+    // Arayan kullanıcıya ringing mesajı gönder (ringback tone için)
+    ws.send(JSON.stringify({
+      type: 'ringing',
+      targetPhoneNumber: normalizedTargetPhoneNumber,
+      timestamp: new Date().toISOString()
+    }));
+    console.log(`[Signaling] ringing mesajı gönderildi: caller=${normalizedCallerPhone}, target=${normalizedTargetPhoneNumber}`);
   } catch (error) {
     console.error(`[Signaling] incoming-call mesajı gönderilemedi:`, error);
     ws.send(JSON.stringify({
@@ -1890,8 +1898,22 @@ function handleLogout(ws, message) {
   const phoneNumber = connectionInfo.phoneNumber;
   console.log(`[Signaling] 👋 Kullanıcı çıkış yaptı: phoneNumber=${phoneNumber}`);
   
-  // Cleanup yapılacak (cleanupConnection çağrılacak)
-  // Burada sadece log yazıyoruz
+  // Logout mesajı gönder
+  try {
+    if (ws.readyState === 1) { // WebSocket.OPEN
+      ws.send(JSON.stringify({
+        type: 'logged-out',
+        phoneNumber: phoneNumber,
+        timestamp: new Date().toISOString()
+      }));
+      console.log(`[Signaling] ✅ Logged-out mesajı gönderildi: phoneNumber=${phoneNumber}`);
+    }
+  } catch (error) {
+    console.error(`[Signaling] ❌ Logged-out mesajı gönderilirken hata:`, error);
+  }
+  
+  // Cleanup yap (kullanıcı kaydını temizle)
+  cleanupConnection(ws);
 }
 
 // Bağlantı temizleme
