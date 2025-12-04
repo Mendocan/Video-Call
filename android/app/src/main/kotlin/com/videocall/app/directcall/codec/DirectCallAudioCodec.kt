@@ -9,6 +9,7 @@ package com.videocall.app.directcall.codec
 
 import android.content.Context
 import android.media.MediaCodec
+import android.media.MediaCodecInfo
 import android.media.MediaCodecList
 import android.media.MediaFormat
 import java.nio.ByteBuffer
@@ -52,18 +53,13 @@ class DirectCallAudioCodec(context: Context) {
             val codecName = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
                 MediaCodecList(MediaCodecList.ALL_CODECS).findEncoderForFormat(format)
             } else {
-                // API 29 öncesi için manuel codec bulma
-                val codecList = MediaCodecList(MediaCodecList.ALL_CODECS)
-                val codecCount = codecList.codecInfos.size
-                for (i in 0 until codecCount) {
-                    val codecInfo = codecList.codecInfos[i]
-                    if (codecInfo.isEncoder) {
-                        val types = codecInfo.supportedTypes
-                        if (types.contains(MediaFormat.MIMETYPE_AUDIO_AAC)) {
-                            codecInfo.name
-                        } else null
-                    } else null
-                }?.firstOrNull()
+                // API 29 öncesi için MediaCodec.createEncoderByType kullan
+                try {
+                    MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)?.codecInfo?.name
+                } catch (e: Exception) {
+                    android.util.Log.e("DirectCallAudioCodec", "AAC encoder bulunamadı", e)
+                    null
+                }
             } ?: throw IllegalStateException("AAC encoder bulunamadı")
             
             encoder = MediaCodec.createByCodecName(codecName)
@@ -102,18 +98,13 @@ class DirectCallAudioCodec(context: Context) {
             val codecName = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
                 MediaCodecList(MediaCodecList.ALL_CODECS).findDecoderForFormat(format)
             } else {
-                // API 29 öncesi için manuel codec bulma
-                val codecList = MediaCodecList(MediaCodecList.ALL_CODECS)
-                val codecCount = codecList.codecInfos.size
-                for (i in 0 until codecCount) {
-                    val codecInfo = codecList.codecInfos[i]
-                    if (!codecInfo.isEncoder) {
-                        val types = codecInfo.supportedTypes
-                        if (types.contains(MediaFormat.MIMETYPE_AUDIO_AAC)) {
-                            codecInfo.name
-                        } else null
-                    } else null
-                }?.firstOrNull()
+                // API 29 öncesi için MediaCodec.createDecoderByType kullan
+                try {
+                    MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)?.codecInfo?.name
+                } catch (e: Exception) {
+                    android.util.Log.e("DirectCallAudioCodec", "AAC decoder bulunamadı", e)
+                    null
+                }
             } ?: throw IllegalStateException("AAC decoder bulunamadı")
             
             decoder = MediaCodec.createByCodecName(codecName)

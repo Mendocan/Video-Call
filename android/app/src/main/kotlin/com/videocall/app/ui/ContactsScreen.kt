@@ -23,6 +23,9 @@ import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.QrCode
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.automirrored.filled.Note
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -51,6 +54,7 @@ import androidx.core.content.ContextCompat
 import com.videocall.app.model.Contact
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.border
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -76,11 +80,13 @@ fun ContactsScreen(
     onContactAdd: (Contact) -> Unit,
     onContactUpdate: (Contact) -> Unit = {},
     onGenerateQRCode: (() -> Unit)? = null,
+    onNavigateToCreateGroup: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     var searchQuery by remember { mutableStateOf("") }
     var showAddDialog by remember { mutableStateOf(false) }
+    var showSettingsMenu by remember { mutableStateOf(false) }
     var newContactName by remember { mutableStateOf("") }
     var newContactPhone by remember { mutableStateOf("") }
     var newContactEmail by remember { mutableStateOf("") }
@@ -132,6 +138,16 @@ fun ContactsScreen(
                 style = MaterialTheme.typography.headlineSmall
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // Mini Ayarlar Butonu
+                IconButton(
+                    onClick = { showSettingsMenu = true }
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Settings,
+                        contentDescription = "Ayarlar",
+                        tint = com.videocall.app.ui.theme.Teal
+                    )
+                }
                 if (onGenerateQRCode != null && addedContacts.isNotEmpty()) {
                     OutlinedButton(
                         onClick = onGenerateQRCode,
@@ -157,6 +173,80 @@ fun ContactsScreen(
                     Text("Kişi Ekle")
                 }
             }
+        }
+        
+        // Kişiler Ayarları Menüsü
+        if (showSettingsMenu) {
+            AlertDialog(
+                onDismissRequest = { showSettingsMenu = false },
+                title = { Text("Kişiler Ayarları") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (onNavigateToCreateGroup != null && addedContacts.size >= 2) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        onNavigateToCreateGroup()
+                                        showSettingsMenu = false
+                                    }
+                                    .padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Group,
+                                    contentDescription = null,
+                                    tint = com.videocall.app.ui.theme.Teal
+                                )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Grup Oluştur",
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                    Text(
+                                        text = "Birden fazla kişiyle grup oluştur",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        } else if (onNavigateToCreateGroup != null && addedContacts.size < 2) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Group,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Grup Oluştur",
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                    )
+                                    Text(
+                                        text = "En az 2 kişi eklemeniz gerekiyor",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { showSettingsMenu = false }) {
+                        Text("Kapat")
+                    }
+                }
+            )
         }
 
         if (showAddDialog) {
@@ -237,10 +327,29 @@ fun ContactsScreen(
         if (permissionGranted && contacts.isNotEmpty()) {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text(
-                        text = "Rehberdeki Kişiler",
-                        style = MaterialTheme.typography.titleMedium
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Rehberdeki Kişiler",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        // Tümünü Ekle butonu
+                        OutlinedButton(
+                            onClick = {
+                                contacts.forEach { contact ->
+                                    if (contact.phoneNumber != null && !addedContacts.any { it.id == contact.id }) {
+                                        onContactAdd(contact)
+                                    }
+                                }
+                            },
+                            shape = RoundedCornerShape(4.dp)
+                        ) {
+                            Text("Tümünü Ekle")
+                        }
+                    }
                     OutlinedTextField(
                         value = searchQuery,
                         onValueChange = { searchQuery = it },
@@ -318,11 +427,14 @@ private fun ContactItem(
             .clickable(onClick = onClick),
         colors = CardDefaults.cardColors(
             containerColor = if (isAdded) {
-                com.videocall.app.ui.theme.Teal.copy(alpha = 0.2f)
+                com.videocall.app.ui.theme.Teal.copy(alpha = 0.15f)
             } else {
                 MaterialTheme.colorScheme.surfaceVariant
             }
-        )
+        ),
+        border = if (isAdded) {
+            androidx.compose.foundation.BorderStroke(2.dp, com.videocall.app.ui.theme.Teal)
+        } else null
     ) {
         Row(
             modifier = Modifier
@@ -438,6 +550,14 @@ private fun ContactItem(
                     contentDescription = "Ekle",
                     tint = com.videocall.app.ui.theme.Teal,
                     modifier = Modifier.padding(4.dp)
+                )
+            } else {
+                // Seçilen kişi için checkmark
+                Icon(
+                    imageVector = Icons.Default.CheckCircle,
+                    contentDescription = "Seçildi",
+                    tint = com.videocall.app.ui.theme.Teal,
+                    modifier = Modifier.size(28.dp)
                 )
             }
         }

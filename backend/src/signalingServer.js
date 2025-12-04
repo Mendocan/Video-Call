@@ -2,7 +2,9 @@ import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
 import { parse } from 'url';
 import { networkInterfaces } from 'os';
-import pushService from './services/pushService.js';
+import connectDB from './db/connection.js';
+import User from './models/User.js';
+// Firebase kaldırıldı - WebSocket kullanıyoruz (bağımsız yapı)
 // SMS servisi kaldırıldı - SMS doğrulama kullanılmıyor
 
 /**
@@ -59,6 +61,12 @@ const userGroups = new Map();
 
 // Engellenenler listesi: phoneNumber -> Set<blockedPhoneNumber>
 const blockedUsers = new Map();
+
+// Canlı yayın yönetimi: liveId -> { broadcasterPhoneNumber, broadcasterName, title, roomCode, viewers: Set<phoneNumber>, startedAt }
+const liveStreams = new Map();
+
+// Canlı yayın ID'leri: phoneNumber -> liveId (bir kullanıcı aynı anda sadece bir canlı yayın yapabilir)
+const broadcasterToLiveId = new Map();
 
 // HTTP server oluştur (WebSocket upgrade için)
 const server = createServer((req, res) => {
@@ -214,7 +222,9 @@ const server = createServer((req, res) => {
         for (let i = 1; i < connList.length; i++) {
           console.log(`[Test] Duplicate bağlantı kapatılıyor: IP=${ip}, eski bağlantı`);
           connList[i].ws.close(1000, 'Duplicate connection');
-          cleanupConnection(connList[i].ws);
+          cleanupConnection(connList[i].ws).catch(err => {
+            console.error(`[Signaling] Cleanup hatası:`, err);
+          });
         }
       }
     });
@@ -376,13 +386,17 @@ wss.on('connection', (ws, req) => {
     } else {
       console.log(`[Signaling] Bağlantı kapandı (kayıtsız kullanıcı)`);
     }
-    cleanupConnection(ws);
+    cleanupConnection(ws).catch(err => {
+      console.error(`[Signaling] Cleanup hatası:`, err);
+    });
   });
 
   // Hata durumunda temizle
   ws.on('error', (error) => {
     console.error(`[Signaling] WebSocket hatası:`, error);
-    cleanupConnection(ws);
+    cleanupConnection(ws).catch(err => {
+      console.error(`[Signaling] Cleanup hatası:`, err);
+    });
   });
 
   // Ping/Pong (keep-alive)
@@ -403,17 +417,18 @@ function handleMessage(ws, message) {
   // Register mesajı özel işlenir (kayıt olmadan diğer mesajlar kabul edilmez)
   if (message.type === 'register') {
     console.log(`[Signaling] Register mesajı alındı: phoneNumber=${message.phoneNumber}, name=${message.name}, IP=${connectionInfo.clientIP}`);
-    handleRegister(ws, message);
+    handleRegister(ws, message).catch(err => {
+      console.error(`[Signaling] Register işlemi hatası:`, err);
+      ws.send(JSON.stringify({ 
+        type: 'register-error', 
+        message: 'Registration failed' 
+      }));
+    });
     return;
   }
 
   // OTP request mesajı kaldırıldı - SMS doğrulama kullanılmıyor
-
-  // FCM token kaydetme
-  if (message.type === 'register-fcm-token') {
-    handleRegisterFCMToken(ws, message);
-    return;
-  }
+  // Firebase kaldırıldı - WebSocket kullanıyoruz (bağımsız yapı)
 
   // Kayıt olmamış kullanıcılar sadece register gönderebilir
   if (!connectionInfo.isRegistered) {
@@ -462,7 +477,14 @@ function handleMessage(ws, message) {
       // Kişiye özel chat mi, yoksa room-based chat mi?
       if (message.targetPhoneNumber) {
         // Kişiye özel chat - direkt hedef kullanıcıya gönder
-        handleDirectChat(ws, message);
+        handleDirectChat(ws, message).catch(err => {
+          console.error(`[Signaling] Direct chat hatası:`, err);
+          ws.send(JSON.stringify({ 
+            type: 'chat-error', 
+            reason: 'Failed to send chat message',
+            message: err.message 
+          }));
+        });
       } else if (roomCode) {
         // Room-based chat - aynı odadaki TÜM katılımcılara gönder
         broadcastToRoom(roomCode, ws, message);
@@ -474,6 +496,21 @@ function handleMessage(ws, message) {
       if (roomCode) {
         broadcastToRoom(roomCode, ws, message);
       }
+      break;
+
+    case 'start-live':
+      // Canlı yayın başlatma
+      handleStartLive(ws, message);
+      break;
+
+    case 'join-live':
+      // Canlı yayına katılma
+      handleJoinLive(ws, message);
+      break;
+
+    case 'end-live':
+      // Canlı yayını sonlandırma
+      handleEndLive(ws, message);
       break;
 
     case 'get-participants':
@@ -506,7 +543,9 @@ function handleMessage(ws, message) {
           });
         }
       }
-      cleanupConnection(ws);
+      cleanupConnection(ws).catch(err => {
+        console.error(`[Signaling] Cleanup hatası:`, err);
+      });
       break;
 
     case 'create-group':
@@ -576,7 +615,9 @@ function handleMessage(ws, message) {
 
     case 'logout':
       // Kullanıcı çıkış yapıyor
-      handleLogout(ws, message);
+      handleLogout(ws, message).catch(err => {
+        console.error(`[Signaling] Logout hatası:`, err);
+      });
       break;
 
     case 'get-blocked-users':
@@ -617,7 +658,7 @@ function broadcastToRoom(roomCode, senderWs, message) {
 }
 
 // Kişiye özel chat mesajı gönderme
-function handleDirectChat(ws, message) {
+async function handleDirectChat(ws, message) {
   const connectionInfo = connections.get(ws);
   if (!connectionInfo || !connectionInfo.isRegistered) {
     ws.send(JSON.stringify({ 
@@ -637,10 +678,12 @@ function handleDirectChat(ws, message) {
     return;
   }
 
-  // Hedef kullanıcıyı bul
-  const targetUser = userRegistry.get(targetPhoneNumber);
+  // Hedef kullanıcıyı bul (gelişmiş arama mekanizması ile - MongoDB desteği ile)
+  let targetUser = await findUserByPhoneNumber(targetPhoneNumber);
   
   if (!targetUser) {
+    console.log(`[Signaling] ⚠️ Chat: Kullanıcı bulunamadı: ${targetPhoneNumber}`);
+    console.log(`[Signaling] 📋 Kayıtlı kullanıcılar (${userRegistry.size} adet):`, Array.from(userRegistry.keys()));
     ws.send(JSON.stringify({
       type: 'chat-error',
       reason: 'User not found or offline',
@@ -648,6 +691,8 @@ function handleDirectChat(ws, message) {
     }));
     return;
   }
+  
+  console.log(`[Signaling] ✅ Chat: Kullanıcı bulundu: ${targetUser.phoneNumber} (aranan: ${targetPhoneNumber})`);
 
   // Hedef kullanıcı online mı?
   if (targetUser.ws.readyState !== 1) {
@@ -677,14 +722,23 @@ function handleDirectChat(ws, message) {
       message: messageText,
       senderPhoneNumber: senderPhoneNumber,
       senderName: senderName,
-      targetPhoneNumber: targetPhoneNumber,
+      targetPhoneNumber: targetUser.phoneNumber, // Bulunan kullanıcının normalize edilmiş numarası
+      messageId: message.messageId || null, // Mesaj ID (varsa)
       timestamp: new Date().toISOString()
     });
     
     targetUser.ws.send(chatMessage);
-    console.log(`[Signaling] Kişiye özel chat mesajı gönderildi: ${senderPhoneNumber} -> ${targetPhoneNumber}`);
+    console.log(`[Signaling] ✅ Kişiye özel chat mesajı gönderildi: ${senderPhoneNumber} -> ${targetUser.phoneNumber} (original: ${targetPhoneNumber})`);
+    
+    // Gönderen kullanıcıya başarı mesajı gönder (mesaj durumu güncellemesi için)
+    ws.send(JSON.stringify({
+      type: 'message-status',
+      messageId: message.messageId || null,
+      status: 'delivered',
+      targetPhoneNumber: targetUser.phoneNumber
+    }));
   } catch (error) {
-    console.error(`[Signaling] Chat mesajı gönderilemedi:`, error);
+    console.error(`[Signaling] ❌ Chat mesajı gönderilemedi:`, error);
     ws.send(JSON.stringify({
       type: 'chat-error',
       reason: 'Failed to send message',
@@ -770,24 +824,32 @@ function generatePhoneNumberVariants(phoneNumber) {
 }
 
 // userRegistry'de telefon numarası ara (fuzzy matching)
-function findUserByPhoneNumber(targetPhoneNumber) {
+// Önce in-memory Map'te ara, bulunamazsa MongoDB'de ara
+async function findUserByPhoneNumber(targetPhoneNumber) {
   if (!targetPhoneNumber) return null;
   
-  // Önce normalize edilmiş numara ile direkt arama
+  // Önce normalize edilmiş numara ile direkt arama (in-memory - hızlı)
   const normalized = normalizePhoneNumber(targetPhoneNumber);
   if (normalized && userRegistry.has(normalized)) {
-    return userRegistry.get(normalized);
+    const userInfo = userRegistry.get(normalized);
+    // WebSocket bağlantısı aktif mi kontrol et
+    if (userInfo.ws.readyState === 1) {
+      return userInfo;
+    }
   }
   
   // Tüm olası formatları oluştur
   const variants = generatePhoneNumberVariants(targetPhoneNumber);
   
-  // Her variant için ara
+  // Her variant için ara (in-memory)
   for (const variant of variants) {
     const normalizedVariant = normalizePhoneNumber(variant);
     if (normalizedVariant && userRegistry.has(normalizedVariant)) {
-      console.log(`[Signaling] ✅ Variant ile bulundu: ${variant} -> ${normalizedVariant}`);
-      return userRegistry.get(normalizedVariant);
+      const userInfo = userRegistry.get(normalizedVariant);
+      if (userInfo.ws.readyState === 1) {
+        console.log(`[Signaling] ✅ Variant ile bulundu: ${variant} -> ${normalizedVariant}`);
+        return userInfo;
+      }
     }
   }
   
@@ -802,19 +864,33 @@ function findUserByPhoneNumber(targetPhoneNumber) {
       
       const registeredLast10 = registeredPhone.slice(-10); // Son 10 hane
       
-      // Son 10 hane eşleşiyorsa
-      if (targetLast10 === registeredLast10) {
+      // Son 10 hane eşleşiyorsa ve WebSocket aktifse
+      if (targetLast10 === registeredLast10 && userInfo.ws.readyState === 1) {
         console.log(`[Signaling] ✅ Son 10 hane eşleşmesi ile bulundu: ${targetPhoneNumber} -> ${registeredPhone}`);
         return userInfo;
       }
     }
   }
   
+  // In-memory'de bulunamadıysa MongoDB'de ara (ama WebSocket bağlantısı olmayan kullanıcılar için arama yapılamaz)
+  // Bu sadece bilgi amaçlı - arama için WebSocket bağlantısı gerekli
+  try {
+    await connectDB();
+    const user = await User.findOne({ phone: normalized, isOnline: true });
+    if (user) {
+      console.log(`[Signaling] ℹ️ MongoDB'de kullanıcı bulundu ama WebSocket bağlantısı yok: ${normalized}`);
+      // WebSocket bağlantısı olmadığı için null döndür (arama yapılamaz)
+      return null;
+    }
+  } catch (error) {
+    console.error(`[Signaling] ⚠️ MongoDB arama hatası:`, error.message);
+  }
+  
   return null;
 }
 
 // Kullanıcı kayıt işleme
-function handleRegister(ws, message) {
+async function handleRegister(ws, message) {
   const { phoneNumber, name } = message;
   
   console.log(`[Signaling] handleRegister çağrıldı: phoneNumber=${phoneNumber}, name=${name}, IP=${ws._socket?.remoteAddress || 'unknown'}`);
@@ -857,10 +933,48 @@ function handleRegister(ws, message) {
   if (existingUser && existingUser.ws !== ws && existingUser.ws.readyState === 1) {
     console.log(`[Signaling] Telefon numarası ${normalizedPhoneNumber} zaten kayıtlı, eski bağlantı kapatılıyor`);
     existingUser.ws.close(1000, 'New registration from same phone number');
-    cleanupConnection(existingUser.ws);
+    cleanupConnection(existingUser.ws).catch(err => {
+      console.error(`[Signaling] Cleanup hatası:`, err);
+    });
   }
 
-  // Kullanıcıyı kaydet (IP adresi ile birlikte)
+  // MongoDB'ye kullanıcıyı kaydet veya güncelle
+  try {
+    await connectDB(); // MongoDB bağlantısını kontrol et
+    
+    // Telefon numarası ile kullanıcıyı bul
+    let user = await User.findOne({ phone: normalizedPhoneNumber });
+    
+    if (user) {
+      // Kullanıcı varsa güncelle
+      user.isOnline = true;
+      user.lastSeen = new Date();
+      if (name) {
+        user.name = name; // İsim güncellenebilir
+      }
+      await user.save();
+      console.log(`[Signaling] ✅ MongoDB'de kullanıcı güncellendi: phoneNumber=${normalizedPhoneNumber}`);
+    } else {
+      // Kullanıcı yoksa yeni oluştur (telefon numarası ile)
+      // userId telefon numarası olarak kullanılacak
+      user = new User({
+        userId: normalizedPhoneNumber,
+        phone: normalizedPhoneNumber,
+        name: name || normalizedPhoneNumber,
+        email: `${normalizedPhoneNumber}@videocall.local`, // Geçici email (unique constraint için)
+        password: 'N/A', // Signaling server kayıtlarında şifre gerekmez
+        isOnline: true,
+        lastSeen: new Date()
+      });
+      await user.save();
+      console.log(`[Signaling] ✅ MongoDB'de yeni kullanıcı oluşturuldu: phoneNumber=${normalizedPhoneNumber}`);
+    }
+  } catch (error) {
+    console.error(`[Signaling] ⚠️ MongoDB kayıt hatası (devam ediliyor):`, error.message);
+    // MongoDB hatası olsa bile in-memory kayıt devam eder
+  }
+
+  // Kullanıcıyı kaydet (IP adresi ile birlikte) - in-memory (hızlı erişim için)
   const userInfo = {
     ws,
     phoneNumber: normalizedPhoneNumber, // Normalize edilmiş telefon numarasını kullan
@@ -914,38 +1028,7 @@ function handleRegister(ws, message) {
   }
 }
 
-// FCM Token kaydetme
-function handleRegisterFCMToken(ws, message) {
-  const connectionInfo = connections.get(ws);
-  if (!connectionInfo || !connectionInfo.isRegistered) {
-    ws.send(JSON.stringify({ 
-      type: 'fcm-token-error', 
-      message: 'Please register first' 
-    }));
-    return;
-  }
-
-  const { fcmToken } = message;
-  const phoneNumber = connectionInfo.phoneNumber;
-  
-  if (!fcmToken) {
-    ws.send(JSON.stringify({ 
-      type: 'fcm-token-error', 
-      message: 'fcmToken is required' 
-    }));
-    return;
-  }
-
-  pushService.registerFCMToken(phoneNumber, fcmToken);
-  
-  ws.send(JSON.stringify({
-    type: 'fcm-token-registered',
-    phoneNumber: phoneNumber,
-    timestamp: new Date().toISOString()
-  }));
-  
-  console.log(`[Signaling] FCM Token kaydedildi: phoneNumber=${phoneNumber}`);
-}
+// Firebase kaldırıldı - WebSocket kullanıyoruz (bağımsız yapı)
 
 // Grup ID oluşturma
 function generateGroupId() {
@@ -1310,7 +1393,7 @@ function handleGetGroupInfo(ws, message) {
 }
 
 // Arama başlatma (bireysel veya grup)
-function handleCallRequest(ws, message) {
+async function handleCallRequest(ws, message) {
   console.log(`[Signaling] call-request alındı:`, JSON.stringify(message));
   
   const connectionInfo = connections.get(ws);
@@ -1376,8 +1459,8 @@ function handleCallRequest(ws, message) {
     return;
   }
 
-  // Hedef kullanıcıyı bul (gelişmiş arama mekanizması ile)
-  let targetUser = findUserByPhoneNumber(targetPhoneNumber);
+  // Hedef kullanıcıyı bul (gelişmiş arama mekanizması ile - MongoDB desteği ile)
+  let targetUser = await findUserByPhoneNumber(targetPhoneNumber);
   
   if (!targetUser) {
     console.log(`[Signaling] ⚠️ Normalize edilmiş numara ile bulunamadı: ${normalizedTargetPhoneNumber} (original: ${targetPhoneNumber})`);
@@ -1407,23 +1490,8 @@ function handleCallRequest(ws, message) {
       console.log(`  - IP: ${conn.clientIP}, Phone: ${conn.phoneNumber || 'Kayıtsız'}, Registered: ${conn.isRegistered}, WS State: ${ws.readyState}`);
     });
     
-    // Offline kullanıcı için push notification gönder
-    if (pushService.isInitialized() && pushService.hasFCMToken(normalizedTargetPhoneNumber)) {
-      console.log(`[Signaling] Offline kullanıcı için push notification gönderiliyor: ${normalizedTargetPhoneNumber}`);
-      pushService.sendIncomingCallNotification(
-        normalizedTargetPhoneNumber,
-        normalizedCallerPhone,
-        callerNameValue
-      ).then(result => {
-        if (result.success) {
-          console.log(`[Signaling] Push notification gönderildi: ${targetPhoneNumber}`);
-          // Offline call queue'ya ekle (gelecekte kullanılabilir)
-          // addToOfflineCallQueue(targetPhoneNumber, { callerPhone, callerName: callerNameValue });
-        } else {
-          console.log(`[Signaling] Push notification gönderilemedi: ${result.error}`);
-        }
-      });
-    }
+    // Firebase kaldırıldı - WebSocket kullanıyoruz (bağımsız yapı)
+    // Offline kullanıcılar için WebSocket bağlantısı yok, arama yapılamaz
     
     ws.send(JSON.stringify({
       type: 'call-error',
@@ -1976,7 +2044,7 @@ function handleLogin(ws, message) {
 }
 
 // Kullanıcı çıkış işleme
-function handleLogout(ws, message) {
+async function handleLogout(ws, message) {
   const connectionInfo = connections.get(ws);
   if (!connectionInfo || !connectionInfo.isRegistered) {
     return; // Zaten kayıtlı değilse logout'a gerek yok
@@ -1984,6 +2052,23 @@ function handleLogout(ws, message) {
 
   const phoneNumber = connectionInfo.phoneNumber;
   console.log(`[Signaling] 👋 Kullanıcı çıkış yaptı: phoneNumber=${phoneNumber}`);
+  
+  // MongoDB'de isOnline=false yap
+  try {
+    await connectDB();
+    await User.findOneAndUpdate(
+      { phone: phoneNumber },
+      { 
+        $set: { 
+          isOnline: false,
+          lastSeen: new Date()
+        } 
+      }
+    );
+    console.log(`[Signaling] ✅ MongoDB'de kullanıcı offline olarak işaretlendi: phoneNumber=${phoneNumber}`);
+  } catch (error) {
+    console.error(`[Signaling] ⚠️ MongoDB logout hatası (devam ediliyor):`, error.message);
+  }
   
   // Logout mesajı gönder
   try {
@@ -2000,16 +2085,37 @@ function handleLogout(ws, message) {
   }
   
   // Cleanup yap (kullanıcı kaydını temizle)
-  cleanupConnection(ws);
+  cleanupConnection(ws).catch(err => {
+    console.error(`[Signaling] Cleanup hatası:`, err);
+  });
 }
 
 // Bağlantı temizleme
-function cleanupConnection(ws) {
+async function cleanupConnection(ws) {
   const connectionInfo = connections.get(ws);
   if (!connectionInfo) return;
 
   const phoneNumber = wsToPhoneNumber.get(ws);
   const roomCode = connectionInfo.roomCode;
+
+  // MongoDB'de isOnline=false yap (eğer phoneNumber varsa)
+  if (phoneNumber) {
+    try {
+      await connectDB();
+      await User.findOneAndUpdate(
+        { phone: phoneNumber },
+        { 
+          $set: { 
+            isOnline: false,
+            lastSeen: new Date()
+          } 
+        }
+      );
+      console.log(`[Signaling] ✅ MongoDB'de kullanıcı offline olarak işaretlendi (cleanup): phoneNumber=${phoneNumber}`);
+    } catch (error) {
+      console.error(`[Signaling] ⚠️ MongoDB cleanup hatası (devam ediliyor):`, error.message);
+    }
+  }
 
   // Kullanıcı kaydını temizle
   if (phoneNumber) {
@@ -2093,7 +2199,9 @@ const pingInterval = setInterval(() => {
   wss.clients.forEach((ws) => {
     if (ws.isAlive === false) {
       // Yanıt vermeyen bağlantıyı kapat
-      cleanupConnection(ws);
+      cleanupConnection(ws).catch(err => {
+        console.error(`[Signaling] Cleanup hatası:`, err);
+      });
       return ws.terminate();
     }
 

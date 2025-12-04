@@ -10,7 +10,7 @@ import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import org.webrtc.VideoTrack
+// import org.webrtc.VideoTrack // DirectCall'da şimdilik kullanılmıyor
 
 class CallRecorder(private val context: Context) {
     private var mediaRecorder: MediaRecorder? = null
@@ -102,8 +102,8 @@ class CallRecorder(private val context: Context) {
      * @return Kayıt dosyasının yolu, başarısız olursa null
      */
     fun startVideoRecording(
-        localVideoTrack: VideoTrack? = null,
-        remoteVideoTrack: VideoTrack? = null
+        localVideoTrack: Any? = null, // VideoTrack yerine Any (DirectCall'da şimdilik kullanılmıyor)
+        remoteVideoTrack: Any? = null // VideoTrack yerine Any (DirectCall'da şimdilik kullanılmıyor)
     ): String? {
         if (isVideoRecording) {
             Log.w(TAG, "Video kaydı zaten devam ediyor")
@@ -117,9 +117,9 @@ class CallRecorder(private val context: Context) {
                 includeRemoteVideo = remoteVideoTrack != null
             )
             
-            // VideoSink'leri video track'lere ekle
-            localVideoTrack?.addSink(videoRecorder?.getLocalVideoSink() ?: return null)
-            remoteVideoTrack?.addSink(videoRecorder?.getRemoteVideoSink() ?: return null)
+            // VideoSink'leri video track'lere ekle (DirectCall'da şimdilik kullanılmıyor)
+            // localVideoTrack?.addSink(videoRecorder?.getLocalVideoSink() ?: return null)
+            // remoteVideoTrack?.addSink(videoRecorder?.getRemoteVideoSink() ?: return null)
             
             isVideoRecording = true
             Log.i(TAG, "Video kaydı başlatıldı: $recordingPath")
@@ -159,13 +159,7 @@ class CallRecorder(private val context: Context) {
      */
     fun isVideoRecording(): Boolean = isVideoRecording
     
-    /**
-     * Video kaydı için Surface sağlar (eski API, kullanılmıyor)
-     */
-    @Deprecated("Video kaydı için startVideoRecording() kullanın")
-    fun getRecordingSurface(): android.view.Surface? {
-        return mediaRecorder?.surface
-    }
+    // getRecordingSurface() kaldırıldı - startVideoRecording() kullanın
     
     /**
      * Kaydı durdurur ve dosyayı döndürür

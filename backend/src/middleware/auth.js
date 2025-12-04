@@ -4,7 +4,7 @@ import { verifyToken, getUserById } from '../auth.js';
  * Authentication middleware
  * Protected route'lar için kullanılır
  */
-export function authenticateToken(req, res, next) {
+export async function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
 
@@ -17,7 +17,7 @@ export function authenticateToken(req, res, next) {
 
   try {
     const decoded = verifyToken(token);
-    const user = getUserById(decoded.userId);
+    const user = await getUserById(decoded.userId);
 
     if (!user) {
       return res.status(401).json({

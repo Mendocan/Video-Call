@@ -1,11 +1,9 @@
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
+import User from './models/User.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
 const JWT_EXPIRES_IN = '7d';
-
-// In-memory user storage (production'da database kullanılmalı)
-export const users = new Map();
 
 /**
  * Kullanıcı kaydı
@@ -14,11 +12,15 @@ export async function registerUser(userData) {
   const { name, email, phone, password } = userData;
 
   // Email kontrolü
-  for (const [id, user] of users.entries()) {
-    if (user.email === email) {
-      throw new Error('Bu e-posta adresi zaten kullanılıyor.');
-    }
-    if (user.phone === phone) {
+  const existingUserByEmail = await User.findOne({ email });
+  if (existingUserByEmail) {
+    throw new Error('Bu e-posta adresi zaten kullanılıyor.');
+  }
+
+  // Telefon kontrolü (eğer telefon numarası varsa)
+  if (phone) {
+    const existingUserByPhone = await User.findOne({ phone });
+    if (existingUserByPhone) {
       throw new Error('Bu telefon numarası zaten kullanılıyor.');
     }
   }
@@ -27,33 +29,40 @@ export async function registerUser(userData) {
   const hashedPassword = await bcrypt.hash(password, 10);
 
   const userId = `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-  const user = {
-    id: userId,
+  
+  // MongoDB'ye kaydet
+  const user = new User({
+    userId,
     name,
     email,
-    phone,
+    phone: phone || null,
     password: hashedPassword,
-    createdAt: new Date().toISOString(),
+    createdAt: new Date(),
     subscription: null // Abonelik bilgisi
-  };
+  });
 
-  users.set(userId, user);
-  return user;
+  await user.save();
+
+  // Response için user objesini döndür (password olmadan)
+  const userObj = user.toJSON();
+  return {
+    id: userObj.userId,
+    userId: userObj.userId,
+    name: userObj.name,
+    email: userObj.email,
+    phone: userObj.phone,
+    createdAt: userObj.createdAt,
+    subscription: userObj.subscription
+  };
 }
 
 /**
  * Kullanıcı girişi
  */
 export async function loginUser(email, password) {
-  // Kullanıcıyı bul
-  let user = null;
-  for (const [id, u] of users.entries()) {
-    if (u.email === email) {
-      user = u;
-      break;
-    }
-  }
-
+  // Kullanıcıyı MongoDB'den bul
+  const user = await User.findOne({ email });
+  
   if (!user) {
     throw new Error('E-posta veya şifre hatalı.');
   }
@@ -66,16 +75,24 @@ export async function loginUser(email, password) {
 
   // JWT token oluştur
   const token = jwt.sign(
-    { userId: user.id, email: user.email },
+    { userId: user.userId, email: user.email },
     JWT_SECRET,
     { expiresIn: JWT_EXPIRES_IN }
   );
 
-  // Şifreyi response'dan çıkar
-  const { password: _, ...userWithoutPassword } = user;
+  // Şifreyi response'dan çıkar (toJSON zaten password'ü çıkarıyor)
+  const userObj = user.toJSON();
 
   return {
-    user: userWithoutPassword,
+    user: {
+      id: userObj.userId,
+      userId: userObj.userId,
+      name: userObj.name,
+      email: userObj.email,
+      phone: userObj.phone,
+      createdAt: userObj.createdAt,
+      subscription: userObj.subscription
+    },
     token
   };
 }
@@ -95,7 +112,64 @@ export function verifyToken(token) {
 /**
  * Kullanıcıyı ID'ye göre bul
  */
-export function getUserById(userId) {
-  return users.get(userId);
+export async function getUserById(userId) {
+  const user = await User.findOne({ userId });
+  if (!user) {
+    return null;
+  }
+  
+  // Response için user objesini döndür (password olmadan)
+  const userObj = user.toJSON();
+  return {
+    id: userObj.userId,
+    userId: userObj.userId,
+    name: userObj.name,
+    email: userObj.email,
+    phone: userObj.phone,
+    createdAt: userObj.createdAt,
+    subscription: userObj.subscription
+  };
+}
+
+/**
+ * Kullanıcıyı email'e göre bul
+ */
+export async function getUserByEmail(email) {
+  const user = await User.findOne({ email });
+  if (!user) {
+    return null;
+  }
+  
+  const userObj = user.toJSON();
+  return {
+    id: userObj.userId,
+    userId: userObj.userId,
+    name: userObj.name,
+    email: userObj.email,
+    phone: userObj.phone,
+    createdAt: userObj.createdAt,
+    subscription: userObj.subscription
+  };
+}
+
+/**
+ * Kullanıcıyı telefon numarasına göre bul
+ */
+export async function getUserByPhone(phone) {
+  const user = await User.findOne({ phone });
+  if (!user) {
+    return null;
+  }
+  
+  const userObj = user.toJSON();
+  return {
+    id: userObj.userId,
+    userId: userObj.userId,
+    name: userObj.name,
+    email: userObj.email,
+    phone: userObj.phone,
+    createdAt: userObj.createdAt,
+    subscription: userObj.subscription
+  };
 }
 
