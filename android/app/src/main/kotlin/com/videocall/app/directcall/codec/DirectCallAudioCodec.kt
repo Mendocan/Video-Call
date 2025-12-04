@@ -55,7 +55,10 @@ class DirectCallAudioCodec(context: Context) {
             } else {
                 // API 29 öncesi için MediaCodec.createEncoderByType kullan
                 try {
-                    MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)?.codecInfo?.name
+                    val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)
+                    val name = codec?.name
+                    codec?.release() // Hemen release et, sadece ismi aldık
+                    name
                 } catch (e: Exception) {
                     android.util.Log.e("DirectCallAudioCodec", "AAC encoder bulunamadı", e)
                     null
@@ -100,7 +103,10 @@ class DirectCallAudioCodec(context: Context) {
             } else {
                 // API 29 öncesi için MediaCodec.createDecoderByType kullan
                 try {
-                    MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)?.codecInfo?.name
+                    val codec = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)
+                    val name = codec?.name
+                    codec?.release() // Hemen release et, sadece ismi aldık
+                    name
                 } catch (e: Exception) {
                     android.util.Log.e("DirectCallAudioCodec", "AAC decoder bulunamadı", e)
                     null

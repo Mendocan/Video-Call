@@ -75,7 +75,10 @@ class DirectCallVideoCodec(context: Context) {
             } else {
                 // API 29 öncesi için MediaCodec.createEncoderByType kullan
                 try {
-                    MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_VP8)?.codecInfo?.name
+                    val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_VP8)
+                    val name = codec?.name
+                    codec?.release() // Hemen release et, sadece ismi aldık
+                    name
                 } catch (e: Exception) {
                     android.util.Log.e("DirectCallVideoCodec", "VP8 encoder bulunamadı", e)
                     null
@@ -121,7 +124,10 @@ class DirectCallVideoCodec(context: Context) {
             } else {
                 // API 29 öncesi için MediaCodec.createDecoderByType kullan
                 try {
-                    MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_VP8)?.codecInfo?.name
+                    val codec = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_VP8)
+                    val name = codec?.name
+                    codec?.release() // Hemen release et, sadece ismi aldık
+                    name
                 } catch (e: Exception) {
                     android.util.Log.e("DirectCallVideoCodec", "VP8 decoder bulunamadı", e)
                     null

@@ -11,6 +11,7 @@ import android.content.Context
 import android.view.SurfaceView
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import com.videocall.app.BuildConfig
 import com.videocall.app.directcall.sdp.DirectCallSdpParser
 import com.videocall.app.directcall.ice.DirectCallIceGatherer
 import com.videocall.app.directcall.ice.DirectCallIceCandidate
@@ -83,8 +84,10 @@ class DirectCallEngine(
      * Offer (SDP) oluştur
      */
     suspend fun createOffer(audioOnly: Boolean = false): String {
-        // 1. ICE candidate'ları topla
-        val iceCandidates = iceGatherer.gatherCandidates()
+        // 1. ICE candidate'ları topla (TURN ile!)
+        val iceCandidates = iceGatherer.gatherCandidates(
+            turnServer = getTurnServerFromBuildConfig()
+        )
         
         // 2. SDP oluştur
         val sdp = sdpParser.createOffer(
@@ -106,8 +109,10 @@ class DirectCallEngine(
         val offerInfo = sdpParser.parse(offer)
         remoteSdp = offer
         
-        // 2. ICE candidate'ları topla
-        val iceCandidates = iceGatherer.gatherCandidates()
+        // 2. ICE candidate'ları topla (TURN ile!)
+        val iceCandidates = iceGatherer.gatherCandidates(
+            turnServer = getTurnServerFromBuildConfig()
+        )
         
         // 3. Answer SDP oluştur
         val answer = sdpParser.createAnswer(
@@ -276,6 +281,24 @@ class DirectCallEngine(
      */
     fun hasActiveConnection(): Boolean {
         return isConnected.get()
+    }
+    
+    /**
+     * BuildConfig'den TURN server bilgilerini al
+     */
+    private fun getTurnServerFromBuildConfig(): DirectCallIceGatherer.TurnServer? {
+        return if (BuildConfig.TURN_SERVER_URL.isNotEmpty() && 
+                    BuildConfig.TURN_USERNAME.isNotEmpty() && 
+                    BuildConfig.TURN_PASSWORD.isNotEmpty()) {
+            DirectCallIceGatherer.TurnServer(
+                urls = BuildConfig.TURN_SERVER_URL,
+                username = BuildConfig.TURN_USERNAME,
+                credential = BuildConfig.TURN_PASSWORD
+            )
+        } else {
+            android.util.Log.w("DirectCallEngine", "⚠️ TURN server credentials bulunamadı - sadece STUN kullanılacak (NAT traversal sınırlı!)")
+            null
+        }
     }
 }
 

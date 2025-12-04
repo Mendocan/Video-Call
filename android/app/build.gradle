@@ -37,6 +37,14 @@ android {
         buildConfigField("String", "SIGNALING_URL", "\"${sanitizedSignalingUrl}\"")
         buildConfigField("String", "BACKEND_API_URL", "\"${sanitizedBackendApiUrl}\"")
         
+        // TURN Server Configuration (Twilio)
+        def turnUrl = project.findProperty("turnServerUrl")?.replaceAll('"', '\\\\"') ?: ""
+        def turnUser = project.findProperty("turnUsername")?.replaceAll('"', '\\\\"') ?: ""
+        def turnPass = project.findProperty("turnPassword")?.replaceAll('"', '\\\\"') ?: ""
+        buildConfigField("String", "TURN_SERVER_URL", "\"${turnUrl}\"")
+        buildConfigField("String", "TURN_USERNAME", "\"${turnUser}\"")
+        buildConfigField("String", "TURN_PASSWORD", "\"${turnPass}\"")
+        
         // 16 KB sayfa boyutu desteği (Android 15+ zorunlu)
         // NDK r28+ otomatik olarak 16 KB alignment kullanır
         // AGP 8.5.1+ (şu an 8.13.1) otomatik olarak native kütüphaneleri 16 KB ile hizalar

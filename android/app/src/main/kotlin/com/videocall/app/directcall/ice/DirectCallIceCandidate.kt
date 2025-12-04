@@ -20,7 +20,9 @@ data class DirectCallIceCandidate(
     val priority: Long,
     val address: String,
     val port: Int,
-    val type: String // "host", "srflx", "relay"
+    val type: String, // "host", "srflx", "relay"
+    val relatedAddress: String? = null, // srflx/relay için base address
+    val relatedPort: Int? = null // srflx/relay için base port
 ) {
     /**
      * SDP formatına çevir
