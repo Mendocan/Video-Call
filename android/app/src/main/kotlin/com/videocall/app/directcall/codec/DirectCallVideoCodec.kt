@@ -12,6 +12,7 @@ import android.graphics.ImageFormat
 import android.media.Image
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
+import android.media.MediaCodecList
 import android.media.MediaFormat
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
@@ -72,20 +73,13 @@ class DirectCallVideoCodec(context: Context) {
             val codecName = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
                 MediaCodecList(MediaCodecList.ALL_CODECS).findEncoderForFormat(format)
             } else {
-                // API 29 öncesi için manuel codec bulma
-                val codecList = MediaCodecList(MediaCodecList.ALL_CODECS)
-                var foundCodec: String? = null
-                for (i in 0 until codecList.codecCount) {
-                    val codecInfo = codecList.getCodecInfoAt(i)
-                    if (codecInfo.isEncoder) {
-                        val types = codecInfo.supportedTypes
-                        if (types.contains(MediaFormat.MIMETYPE_VIDEO_VP8)) {
-                            foundCodec = codecInfo.name
-                            break
-                        }
-                    }
+                // API 29 öncesi için MediaCodec.createEncoderByType kullan
+                try {
+                    MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_VP8)?.codecInfo?.name
+                } catch (e: Exception) {
+                    android.util.Log.e("DirectCallVideoCodec", "VP8 encoder bulunamadı", e)
+                    null
                 }
-                foundCodec
             } ?: throw IllegalStateException("VP8 encoder bulunamadı")
             
             encoder = MediaCodec.createByCodecName(codecName)
@@ -125,20 +119,13 @@ class DirectCallVideoCodec(context: Context) {
             val codecName = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
                 MediaCodecList(MediaCodecList.ALL_CODECS).findDecoderForFormat(format)
             } else {
-                // API 29 öncesi için manuel codec bulma
-                val codecList = MediaCodecList(MediaCodecList.ALL_CODECS)
-                var foundCodec: String? = null
-                for (i in 0 until codecList.codecCount) {
-                    val codecInfo = codecList.getCodecInfoAt(i)
-                    if (!codecInfo.isEncoder) {
-                        val types = codecInfo.supportedTypes
-                        if (types.contains(MediaFormat.MIMETYPE_VIDEO_VP8)) {
-                            foundCodec = codecInfo.name
-                            break
-                        }
-                    }
+                // API 29 öncesi için MediaCodec.createDecoderByType kullan
+                try {
+                    MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_VP8)?.codecInfo?.name
+                } catch (e: Exception) {
+                    android.util.Log.e("DirectCallVideoCodec", "VP8 decoder bulunamadı", e)
+                    null
                 }
-                foundCodec
             } ?: throw IllegalStateException("VP8 decoder bulunamadı")
             
             decoder = MediaCodec.createByCodecName(codecName)

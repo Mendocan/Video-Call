@@ -8,14 +8,26 @@ import { anomalyDetection, getAllSuspiciousActivities } from './middleware/anoma
 import emailService from './services/emailService.js';
 import smsService from './services/smsService.js';
 import paymentService from './services/paymentService.js';
+import connectDB from './db/connection.js';
+import Subscription from './models/Subscription.js';
+import SubscriptionCode from './models/SubscriptionCode.js';
+import DeviceRegistration from './models/DeviceRegistration.js';
+import Feedback from './models/Feedback.js';
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Feedback storage (production'da veritabanı kullanılacak)
-const feedbacks = [];
+// MongoDB bağlantısını başlat
+let dbConnected = false;
+connectDB().then(() => {
+  dbConnected = true;
+  console.log('✅ MongoDB bağlantısı başarılı - Backend hazır');
+}).catch((error) => {
+  console.error('❌ MongoDB bağlantı hatası:', error.message);
+  console.warn('⚠️ Backend MongoDB olmadan çalışacak (in-memory fallback)');
+});
 
 app.use(cors());
 app.use(express.json());
@@ -84,17 +96,209 @@ const PRICING_PLANS = {
   }
 };
 
-// In-memory subscription storage (production'da database kullanılmalı)
-const subscriptions = new Map();
+// MongoDB kullanılıyor - Map'ler kaldırıldı
+// subscriptions -> Subscription model
+// subscriptionCodes -> SubscriptionCode model
+// deviceRegistrations -> DeviceRegistration model
+// feedbacks -> Feedback model
 
-// Abonelik kodları: code -> { phoneNumber, planId, expiresAt, used, usedAt, usedBy }
-// Yıllık abonelik kodları hem mobil hem desktop için geçerli
-const subscriptionCodes = new Map();
-
-// Cihaz kayıt sistemi (APK paylaşımını önlemek için)
-// phoneNumber -> [deviceId1, deviceId2, ...] (maksimum 2 cihaz)
-const deviceRegistrations = new Map();
 const MAX_DEVICES_PER_SUBSCRIPTION = 2; // Bir abonelik için maksimum cihaz sayısı (telefon yenileme hakkı için)
+
+// MongoDB Helper Functions
+async function getSubscriptionById(subscriptionId) {
+  if (!dbConnected) return null;
+  const sub = await Subscription.findOne({ subscriptionId });
+  if (!sub) return null;
+  return {
+    id: sub.subscriptionId,
+    subscriptionId: sub.subscriptionId,
+    userId: sub.userId,
+    phoneNumber: sub.phoneNumber,
+    planId: sub.planId,
+    status: sub.status,
+    paymentId: sub.paymentId,
+    createdAt: sub.createdAt.toISOString(),
+    expiresAt: sub.expiresAt.toISOString()
+  };
+}
+
+async function saveSubscription(subscriptionData) {
+  if (!dbConnected) {
+    console.warn('⚠️ MongoDB bağlantısı yok, subscription kaydedilemedi');
+    return null;
+  }
+  const sub = new Subscription({
+    subscriptionId: subscriptionData.id || subscriptionData.subscriptionId,
+    userId: subscriptionData.userId,
+    phoneNumber: subscriptionData.phoneNumber,
+    planId: subscriptionData.planId,
+    status: subscriptionData.status,
+    paymentId: subscriptionData.paymentId || null,
+    createdAt: subscriptionData.createdAt ? new Date(subscriptionData.createdAt) : new Date(),
+    expiresAt: new Date(subscriptionData.expiresAt)
+  });
+  await sub.save();
+  return sub;
+}
+
+async function updateSubscription(subscriptionId, updateData) {
+  if (!dbConnected) {
+    console.warn('⚠️ MongoDB bağlantısı yok, subscription güncellenemedi');
+    return null;
+  }
+  const sub = await Subscription.findOneAndUpdate(
+    { subscriptionId },
+    { $set: updateData },
+    { new: true }
+  );
+  return sub;
+}
+
+async function getActiveSubscriptions(userId, phoneNumber) {
+  if (!dbConnected) return [];
+  const query = {
+    status: 'active',
+    expiresAt: { $gt: new Date() },
+    $or: []
+  };
+  if (userId) query.$or.push({ userId });
+  if (phoneNumber) query.$or.push({ phoneNumber });
+  if (query.$or.length === 0) return [];
+  
+  const subs = await Subscription.find(query).sort({ createdAt: -1 });
+  return subs.map(sub => ({
+    id: sub.subscriptionId,
+    subscriptionId: sub.subscriptionId,
+    userId: sub.userId,
+    phoneNumber: sub.phoneNumber,
+    planId: sub.planId,
+    status: sub.status,
+    paymentId: sub.paymentId,
+    createdAt: sub.createdAt.toISOString(),
+    expiresAt: sub.expiresAt.toISOString()
+  }));
+}
+
+async function getAllSubscriptions() {
+  if (!dbConnected) return [];
+  const subs = await Subscription.find({});
+  return subs.map(sub => ({
+    id: sub.subscriptionId,
+    subscriptionId: sub.subscriptionId,
+    userId: sub.userId,
+    phoneNumber: sub.phoneNumber,
+    planId: sub.planId,
+    status: sub.status,
+    paymentId: sub.paymentId,
+    createdAt: sub.createdAt.toISOString(),
+    expiresAt: sub.expiresAt.toISOString()
+  }));
+}
+
+async function getSubscriptionCode(code) {
+  if (!dbConnected) return null;
+  const codeData = await SubscriptionCode.findOne({ code: code.toUpperCase() });
+  if (!codeData) return null;
+  return {
+    code: codeData.code,
+    phoneNumber: codeData.phoneNumber,
+    planId: codeData.planId,
+    expiresAt: codeData.expiresAt ? codeData.expiresAt.toISOString() : null,
+    used: codeData.used,
+    usedAt: codeData.usedAt ? codeData.usedAt.toISOString() : null,
+    usedBy: codeData.usedBy,
+    deviceType: codeData.deviceType,
+    subscriptionId: codeData.subscriptionId,
+    createdAt: codeData.createdAt.toISOString()
+  };
+}
+
+async function saveSubscriptionCode(codeData) {
+  if (!dbConnected) {
+    console.warn('⚠️ MongoDB bağlantısı yok, subscription code kaydedilemedi');
+    return null;
+  }
+  const code = new SubscriptionCode({
+    code: codeData.code.toUpperCase(),
+    phoneNumber: codeData.phoneNumber || null,
+    planId: codeData.planId,
+    expiresAt: codeData.expiresAt ? new Date(codeData.expiresAt) : null,
+    used: codeData.used || false,
+    usedAt: codeData.usedAt ? new Date(codeData.usedAt) : null,
+    usedBy: codeData.usedBy || null,
+    deviceType: codeData.deviceType || null,
+    subscriptionId: codeData.subscriptionId || null,
+    createdAt: codeData.createdAt ? new Date(codeData.createdAt) : new Date()
+  });
+  await code.save();
+  return code;
+}
+
+async function updateSubscriptionCode(code, updateData) {
+  if (!dbConnected) {
+    console.warn('⚠️ MongoDB bağlantısı yok, subscription code güncellenemedi');
+    return null;
+  }
+  const codeData = await SubscriptionCode.findOneAndUpdate(
+    { code: code.toUpperCase() },
+    { $set: updateData },
+    { new: true }
+  );
+  return codeData;
+}
+
+async function getDeviceRegistrations(phoneNumber) {
+  if (!dbConnected) return [];
+  const devices = await DeviceRegistration.find({ phoneNumber });
+  return devices.map(dev => dev.deviceId);
+}
+
+async function saveDeviceRegistration(phoneNumber, deviceId) {
+  if (!dbConnected) {
+    console.warn('⚠️ MongoDB bağlantısı yok, device registration kaydedilemedi');
+    return null;
+  }
+  const device = new DeviceRegistration({
+    phoneNumber,
+    deviceId,
+    registeredAt: new Date(),
+    lastSeen: new Date()
+  });
+  await device.save();
+  return device;
+}
+
+async function updateDeviceLastSeen(phoneNumber, deviceId) {
+  if (!dbConnected) return null;
+  await DeviceRegistration.findOneAndUpdate(
+    { phoneNumber, deviceId },
+    { $set: { lastSeen: new Date() } }
+  );
+}
+
+async function deleteDeviceRegistration(phoneNumber, deviceId) {
+  if (!dbConnected) return null;
+  await DeviceRegistration.deleteOne({ phoneNumber, deviceId });
+}
+
+async function saveFeedback(feedbackData) {
+  if (!dbConnected) {
+    console.warn('⚠️ MongoDB bağlantısı yok, feedback kaydedilemedi');
+    return null;
+  }
+  const feedback = new Feedback({
+    userId: feedbackData.userId || null,
+    email: feedbackData.email || null,
+    phoneNumber: feedbackData.phoneNumber || null,
+    type: feedbackData.type,
+    subject: feedbackData.subject,
+    message: feedbackData.message,
+    rating: feedbackData.rating || null,
+    createdAt: new Date()
+  });
+  await feedback.save();
+  return feedback;
+}
 
 // Signaling Server IP Storage
 // Otomatik IP bulma için signaling server'ın IP'sini sakla
@@ -318,7 +522,7 @@ app.post('/api/subscribe', authenticateToken, rateLimiter('subscription'), async
             conversationId: iyzicoPayment.conversationId
           };
           
-          subscriptions.set(subscriptionId, subscription);
+          await saveSubscription(subscription);
           
           return res.json({
             success: true,
@@ -344,7 +548,7 @@ app.post('/api/subscribe', authenticateToken, rateLimiter('subscription'), async
             conversationId: iyzicoPayment.conversationId
           };
           
-          subscriptions.set(subscriptionId, subscription);
+          await saveSubscription(subscription);
           req.user.subscription = subscriptionId;
 
           // Bildirimler
@@ -395,7 +599,7 @@ app.post('/api/subscribe', authenticateToken, rateLimiter('subscription'), async
       paymentMethod: paymentMethod || 'card'
     };
     
-    subscriptions.set(subscriptionId, subscription);
+    await saveSubscription(subscription);
     req.user.subscription = subscriptionId;
     
     res.json({
@@ -430,11 +634,12 @@ app.post('/api/payment/callback', async (req, res) => {
 
     if (result.status === 'success') {
       // Aboneliği aktif et
-      const subscription = subscriptions.get(subscriptionId);
+      const subscription = await getSubscriptionById(subscriptionId);
       if (subscription) {
-        subscription.status = 'active';
-        subscription.paymentId = result.paymentId;
-        subscriptions.set(subscriptionId, subscription);
+        await updateSubscription(subscriptionId, {
+          status: 'active',
+          paymentId: result.paymentId
+        });
 
         // Bildirimler
         // TODO: Kullanıcı bilgilerini al ve bildirim gönder
@@ -471,28 +676,13 @@ app.get('/api/payment/:paymentId', authenticateToken, async (req, res) => {
 });
 
 // Check subscription status (Protected - kendi aboneliğini kontrol eder)
-app.get('/api/subscription/me', authenticateToken, (req, res) => {
+app.get('/api/subscription/me', authenticateToken, async (req, res) => {
   const userId = req.user.id;
   const phoneNumber = req.user.phone;
   
   // Kullanıcının aktif aboneliğini bul (userId veya phoneNumber ile)
-  let activeSubscription = null;
-  for (const [id, sub] of subscriptions.entries()) {
-    const matches = (sub.userId === userId) || 
-                   (phoneNumber && sub.phoneNumber === phoneNumber);
-    
-    if (matches) {
-      const expiresAt = new Date(sub.expiresAt);
-      const now = new Date();
-      
-      if (expiresAt > now && sub.status === 'active') {
-        // En son aktif olanı seç (birden fazla varsa)
-        if (!activeSubscription || new Date(sub.createdAt) > new Date(activeSubscription.createdAt)) {
-          activeSubscription = sub;
-        }
-      }
-    }
-  }
+  const activeSubscriptions = await getActiveSubscriptions(userId, phoneNumber);
+  const activeSubscription = activeSubscriptions.length > 0 ? activeSubscriptions[0] : null;
   
   if (!activeSubscription) {
     // Abonelik yoksa veya süresi dolmuşsa
@@ -522,27 +712,13 @@ app.get('/api/subscription/me', authenticateToken, (req, res) => {
 });
 
 // Subscription endpoint (alias for /me)
-app.get('/api/subscription', authenticateToken, (req, res) => {
+app.get('/api/subscription', authenticateToken, async (req, res) => {
   // /subscription/me endpoint'ine yönlendir
   const userId = req.user.id;
   const phoneNumber = req.user.phone;
   
-  let activeSubscription = null;
-  for (const [id, sub] of subscriptions.entries()) {
-    const matches = (sub.userId === userId) || 
-                   (phoneNumber && sub.phoneNumber === phoneNumber);
-    
-    if (matches) {
-      const expiresAt = new Date(sub.expiresAt);
-      const now = new Date();
-      
-      if (expiresAt > now && sub.status === 'active') {
-        if (!activeSubscription || new Date(sub.createdAt) > new Date(activeSubscription.createdAt)) {
-          activeSubscription = sub;
-        }
-      }
-    }
-  }
+  const activeSubscriptions = await getActiveSubscriptions(userId, phoneNumber);
+  const activeSubscription = activeSubscriptions.length > 0 ? activeSubscriptions[0] : null;
   
   if (!activeSubscription) {
     return res.json({
@@ -570,9 +746,9 @@ app.get('/api/subscription', authenticateToken, (req, res) => {
 });
 
 // Cancel subscription (abonelik bitince otomatik freemium'a düşer)
-app.post('/api/subscription/:subscriptionId/cancel', (req, res) => {
+app.post('/api/subscription/:subscriptionId/cancel', async (req, res) => {
   const { subscriptionId } = req.params;
-  const subscription = subscriptions.get(subscriptionId);
+  const subscription = await getSubscriptionById(subscriptionId);
   
   if (!subscription) {
     return res.status(404).json({
@@ -581,8 +757,7 @@ app.post('/api/subscription/:subscriptionId/cancel', (req, res) => {
     });
   }
   
-  subscription.status = 'cancelled';
-  subscriptions.set(subscriptionId, subscription);
+  await updateSubscription(subscriptionId, { status: 'cancelled' });
   
   res.json({
     success: true,
@@ -603,7 +778,7 @@ app.post('/api/subscription/activate-code', rateLimiter('subscription'), async (
     }
     
     // Abonelik kodunu bul
-    const codeData = subscriptionCodes.get(code.toUpperCase());
+    const codeData = await getSubscriptionCode(code);
     
     if (!codeData) {
       return res.status(404).json({
@@ -659,14 +834,16 @@ app.post('/api/subscription/activate-code', rateLimiter('subscription'), async (
       deviceType: deviceType || 'mobile'
     };
     
-    subscriptions.set(subscriptionId, subscription);
+    await saveSubscription(subscription);
     
     // Kodu kullanıldı olarak işaretle (ama aynı kullanıcı için tekrar kullanılabilir)
-    codeData.used = true;
-    codeData.usedAt = now.toISOString();
-    codeData.usedBy = phoneNumber;
-    codeData.deviceType = deviceType || 'mobile';
-    codeData.subscriptionId = subscriptionId;
+    await updateSubscriptionCode(code, {
+      used: true,
+      usedAt: new Date(),
+      usedBy: phoneNumber,
+      deviceType: deviceType || 'mobile',
+      subscriptionId: subscriptionId
+    });
     
     res.json({
       success: true,
@@ -685,7 +862,7 @@ app.post('/api/subscription/activate-code', rateLimiter('subscription'), async (
 
 // Abonelik kodu oluşturma (admin için - test amaçlı)
 // Production'da bu endpoint admin authentication ile korunmalı
-app.post('/api/admin/subscription-codes/generate', (req, res) => {
+app.post('/api/admin/subscription-codes/generate', async (req, res) => {
   try {
     const { phoneNumber, planId = 'yearly', count = 1 } = req.body;
     
@@ -707,7 +884,7 @@ app.post('/api/admin/subscription-codes/generate', (req, res) => {
         createdAt: new Date().toISOString()
       };
       
-      subscriptionCodes.set(code, codeData);
+      await saveSubscriptionCode(codeData);
       generatedCodes.push(code);
     }
     
@@ -747,10 +924,11 @@ app.post('/api/devices/register', rateLimiter('device'), async (req, res) => {
   // Not: Web'den abonelik oluşturulduğunda telefon numarası da kaydedilmeli
   
   // Mevcut cihazları al
-  const registeredDevices = deviceRegistrations.get(phoneNumber) || [];
+  const registeredDevices = await getDeviceRegistrations(phoneNumber);
   
   // Cihaz zaten kayıtlı mı?
   if (registeredDevices.includes(deviceId)) {
+    await updateDeviceLastSeen(phoneNumber, deviceId);
     return res.json({
       success: true,
       message: 'Cihaz zaten kayıtlı.'
@@ -766,19 +944,19 @@ app.post('/api/devices/register', rateLimiter('device'), async (req, res) => {
   }
   
   // Yeni cihazı kaydet
-  registeredDevices.push(deviceId);
-  deviceRegistrations.set(phoneNumber, registeredDevices);
+  await saveDeviceRegistration(phoneNumber, deviceId);
   
+  const newDeviceCount = registeredDevices.length + 1;
   res.json({
     success: true,
     message: 'Cihaz başarıyla kaydedildi.',
-    deviceCount: registeredDevices.length,
+    deviceCount: newDeviceCount,
     maxDevices: MAX_DEVICES_PER_SUBSCRIPTION
   });
 });
 
 // Cihaz doğrulama
-app.post('/api/devices/verify', rateLimiter('device'), (req, res) => {
+app.post('/api/devices/verify', rateLimiter('device'), async (req, res) => {
   const { phoneNumber, deviceId } = req.body;
   
   if (!phoneNumber || !deviceId) {
@@ -790,7 +968,8 @@ app.post('/api/devices/verify', rateLimiter('device'), (req, res) => {
   
   // Abonelik kontrolü
   let hasActiveSubscription = false;
-  for (const [id, sub] of subscriptions.entries()) {
+  const allSubscriptions = await getAllSubscriptions();
+  for (const sub of allSubscriptions) {
     if (sub.status === 'active' && new Date(sub.expiresAt) > new Date()) {
       hasActiveSubscription = true;
       break;
@@ -805,7 +984,7 @@ app.post('/api/devices/verify', rateLimiter('device'), (req, res) => {
   }
   
   // Cihaz kayıtlı mı?
-  const registeredDevices = deviceRegistrations.get(phoneNumber) || [];
+  const registeredDevices = await getDeviceRegistrations(phoneNumber);
   
   if (!registeredDevices.includes(deviceId)) {
     return res.status(403).json({
@@ -814,6 +993,9 @@ app.post('/api/devices/verify', rateLimiter('device'), (req, res) => {
     });
   }
   
+  // Last seen güncelle
+  await updateDeviceLastSeen(phoneNumber, deviceId);
+  
   res.json({
     success: true,
     message: 'Cihaz yetkili.'
@@ -821,37 +1003,36 @@ app.post('/api/devices/verify', rateLimiter('device'), (req, res) => {
 });
 
 // Kullanıcının kayıtlı cihazlarını listele
-app.get('/api/devices/:phoneNumber', (req, res) => {
+app.get('/api/devices/:phoneNumber', async (req, res) => {
   const { phoneNumber } = req.params;
-  const registeredDevices = deviceRegistrations.get(phoneNumber) || [];
+  const devices = await DeviceRegistration.find({ phoneNumber }).sort({ registeredAt: -1 });
   
   res.json({
     success: true,
-    devices: registeredDevices.map((deviceId, index) => ({
-      id: deviceId,
+    devices: devices.map((device, index) => ({
+      id: device.deviceId,
       index: index + 1,
-      registeredAt: new Date().toISOString() // TODO: Production'da gerçek kayıt tarihi
+      registeredAt: device.registeredAt.toISOString(),
+      lastSeen: device.lastSeen.toISOString()
     })),
-    count: registeredDevices.length,
+    count: devices.length,
     maxDevices: MAX_DEVICES_PER_SUBSCRIPTION
   });
 });
 
 // Cihaz kaydını kaldır
-app.delete('/api/devices/:phoneNumber/:deviceId', (req, res) => {
+app.delete('/api/devices/:phoneNumber/:deviceId', async (req, res) => {
   const { phoneNumber, deviceId } = req.params;
-  const registeredDevices = deviceRegistrations.get(phoneNumber) || [];
   
-  const index = registeredDevices.indexOf(deviceId);
-  if (index === -1) {
+  const device = await DeviceRegistration.findOne({ phoneNumber, deviceId });
+  if (!device) {
     return res.status(404).json({
       success: false,
       error: 'Cihaz bulunamadı.'
     });
   }
   
-  registeredDevices.splice(index, 1);
-  deviceRegistrations.set(phoneNumber, registeredDevices);
+  await deleteDeviceRegistration(phoneNumber, deviceId);
   
   res.json({
     success: true,
@@ -1146,9 +1327,10 @@ app.post('/api/presence/heartbeat', authenticateToken, (req, res) => {
 });
 
 // Feedback ortalama puan endpoint'i
-app.get('/api/feedback/average', (req, res) => {
+app.get('/api/feedback/average', async (req, res) => {
   try {
-    if (feedbacks.length === 0) {
+    const allFeedbacks = await Feedback.find({ rating: { $ne: null } });
+    if (allFeedbacks.length === 0) {
       return res.json({
         success: true,
         average: 0,
@@ -1156,14 +1338,14 @@ app.get('/api/feedback/average', (req, res) => {
       });
     }
 
-    const totalRating = feedbacks.reduce((sum, feedback) => sum + feedback.rating, 0);
-    const average = totalRating / feedbacks.length;
+    const totalRating = allFeedbacks.reduce((sum, feedback) => sum + (feedback.rating || 0), 0);
+    const average = totalRating / allFeedbacks.length;
     const roundedAverage = Math.round(average * 10) / 10; // 1 ondalık basamak
 
     res.json({
       success: true,
       average: roundedAverage,
-      count: feedbacks.length
+      count: allFeedbacks.length
     });
   } catch (error) {
     console.error('Feedback average endpoint hatası:', error);
@@ -1219,7 +1401,7 @@ app.post('/api/feedback', rateLimiter('feedback'), async (req, res) => {
     };
 
     // Memory'de sakla (production'da veritabanına kaydedilecek)
-    feedbacks.push(feedbackData);
+    await saveFeedback(feedbackData);
 
     // Console'a log
     console.log('📝 Yeni geri bildirim:', feedbackData);
@@ -1281,7 +1463,8 @@ function startNotificationJobs() {
         return getUserById(userId);
       };
 
-      await checkAndSendRenewalReminders(subscriptions, getUserByEmail);
+      const allSubscriptions = await getAllSubscriptions();
+      await checkAndSendRenewalReminders(allSubscriptions, getUserByEmail);
       console.log('Bildirim görevleri çalıştırıldı:', new Date().toISOString());
     } catch (error) {
       console.error('Bildirim görevleri hatası:', error);

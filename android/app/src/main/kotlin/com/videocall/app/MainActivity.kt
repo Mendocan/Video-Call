@@ -13,6 +13,9 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
 import androidx.core.view.WindowCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.lifecycleScope
 import com.videocall.app.ui.VideoCallApp
 import com.videocall.app.viewmodel.VideoCallViewModel
@@ -23,9 +26,11 @@ import kotlinx.coroutines.flow.collect
 
 class MainActivity : ComponentActivity() {
 
-    private val viewModel: VideoCallViewModel by viewModels {
-        VideoCallViewModel.factory(application)
-    }
+    private val viewModel: VideoCallViewModel by viewModels(
+        factoryProducer = {
+            VideoCallViewModel.factory(application)
+        }
+    )
     
     private var isInPictureInPictureMode = false
 
@@ -57,6 +62,25 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+        
+        // Lifecycle observer ekle - uygulama foreground'a döndüğünde bağlantıyı kontrol et
+        lifecycle.addObserver(object : LifecycleEventObserver {
+            override fun onStateChanged(source: LifecycleOwner, event: Lifecycle.Event) {
+                when (event) {
+                    Lifecycle.Event.ON_RESUME -> {
+                        // Uygulama foreground'a döndüğünde bağlantıyı kontrol et ve reconnect'i etkinleştir
+                        android.util.Log.d("MainActivity", "Uygulama foreground'a döndü, bağlantı kontrol ediliyor...")
+                        viewModel.checkAndReconnect()
+                    }
+                    Lifecycle.Event.ON_PAUSE -> {
+                        // Uygulama arka plana geçtiğinde reconnect'i etkinleştir (ekran kilitlenince de çalışır)
+                        android.util.Log.d("MainActivity", "Uygulama arka plana geçti")
+                        viewModel.enableReconnect()
+                    }
+                    else -> {}
+                }
+            }
+        })
     }
     
     /**

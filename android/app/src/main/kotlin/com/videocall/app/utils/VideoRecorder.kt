@@ -7,8 +7,8 @@ import android.media.MediaFormat
 import android.media.MediaMuxer
 import android.os.Build
 import android.util.Log
-import org.webrtc.VideoFrame
-import org.webrtc.VideoSink
+// import org.webrtc.VideoFrame // DirectCall'da şimdilik kullanılmıyor
+// import org.webrtc.VideoSink // DirectCall'da şimdilik kullanılmıyor
 import java.io.File
 import java.nio.ByteBuffer
 import java.text.SimpleDateFormat
@@ -36,6 +36,8 @@ class VideoRecorder(
     private var audioTrackIndex = -1
     private val frameCount = AtomicInteger(0)
     
+    // DirectCall'da şimdilik kullanılmıyor
+    /*
     private val localVideoSink = object : VideoSink {
         override fun onFrame(frame: VideoFrame) {
             if (isRecording.get()) {
@@ -51,6 +53,7 @@ class VideoRecorder(
             }
         }
     }
+    */
     
     companion object {
         private const val TAG = "VideoRecorder"
@@ -113,19 +116,22 @@ class VideoRecorder(
     }
     
     /**
-     * Local video track için VideoSink döndürür
+     * Local video track için VideoSink döndürür (DirectCall'da şimdilik kullanılmıyor)
      */
-    fun getLocalVideoSink(): VideoSink = localVideoSink
+    // fun getLocalVideoSink(): VideoSink = localVideoSink
     
     /**
-     * Remote video track için VideoSink döndürür
+     * Remote video track için VideoSink döndürür (DirectCall'da şimdilik kullanılmıyor)
      */
-    fun getRemoteVideoSink(): VideoSink = remoteVideoSink
+    // fun getRemoteVideoSink(): VideoSink = remoteVideoSink
     
     /**
-     * Video frame'ini encode eder
+     * Video frame'ini encode eder (DirectCall'da şimdilik kullanılmıyor)
      */
-    private fun encodeFrame(frame: VideoFrame) {
+    private fun encodeFrame(frame: Any) { // VideoFrame yerine Any
+        // DirectCall'da şimdilik kullanılmıyor
+        return
+        /*
         val encoder = videoEncoder ?: return
         
         try {
@@ -163,6 +169,7 @@ class VideoRecorder(
         } catch (e: Exception) {
             Log.e(TAG, "Frame encode hatası", e)
         }
+        */
     }
     
     /**

@@ -5,12 +5,16 @@ import android.app.NotificationManager as AndroidNotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.media.AudioAttributes
+import android.media.RingtoneManager
+import android.net.Uri
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import com.videocall.app.MainActivity
 
 class NotificationManager(private val context: Context) {
     private val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as AndroidNotificationManager
+    private var ringtone: android.media.Ringtone? = null
     
     companion object {
         private const val CHANNEL_ID_INCOMING_CALL = "incoming_call_channel"
@@ -28,6 +32,10 @@ class NotificationManager(private val context: Context) {
     
     private fun createNotificationChannels() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            // Varsayılan çağrı zil sesini al
+            val ringtoneUri: Uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+            
             // Gelen arama bildirimi kanalı
             val incomingCallChannel = NotificationChannel(
                 CHANNEL_ID_INCOMING_CALL,
@@ -36,7 +44,17 @@ class NotificationManager(private val context: Context) {
             ).apply {
                 description = "Gelen video görüşme bildirimleri"
                 enableVibration(true)
+                vibrationPattern = longArrayOf(0, 500, 200, 500, 200, 500) // Çağrı titreşim deseni
                 enableLights(true)
+                lightColor = android.graphics.Color.BLUE
+                // Çağrı zil sesini ayarla
+                setSound(
+                    ringtoneUri,
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
+                )
             }
             
             // Mesaj bildirimi kanalı
@@ -64,7 +82,7 @@ class NotificationManager(private val context: Context) {
     }
     
     /**
-     * Gelen arama bildirimi gösterir
+     * Gelen arama bildirimi gösterir ve çağrı zil sesini çalar
      */
     fun showIncomingCallNotification(
         callerName: String,
@@ -85,6 +103,10 @@ class NotificationManager(private val context: Context) {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         
+        // Varsayılan çağrı zil sesini al
+        val ringtoneUri: Uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+            ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+        
         val notification = NotificationCompat.Builder(context, CHANNEL_ID_INCOMING_CALL)
             .setSmallIcon(android.R.drawable.ic_menu_call)
             .setContentTitle("Gelen Arama")
@@ -95,9 +117,43 @@ class NotificationManager(private val context: Context) {
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
+            .setSound(ringtoneUri) // Çağrı zil sesi
+            .setVibrate(longArrayOf(0, 500, 200, 500, 200, 500)) // Çağrı titreşim deseni
             .build()
         
         notificationManager.notify(NOTIFICATION_ID_INCOMING_CALL, notification)
+        
+        // Çağrı zil sesini çal (arka planda)
+        startRinging(ringtoneUri)
+    }
+    
+    /**
+     * Çağrı zil sesini çalar
+     */
+    private fun startRinging(ringtoneUri: Uri) {
+        try {
+            // Önceki zil sesini durdur
+            stopRinging()
+            
+            // Yeni zil sesini başlat
+            ringtone = RingtoneManager.getRingtone(context, ringtoneUri)
+            ringtone?.isLooping = true // Sürekli çal
+            ringtone?.play()
+        } catch (e: Exception) {
+            android.util.Log.e("NotificationManager", "Çağrı zil sesi çalınamadı", e)
+        }
+    }
+    
+    /**
+     * Çağrı zil sesini durdurur
+     */
+    fun stopRinging() {
+        try {
+            ringtone?.stop()
+            ringtone = null
+        } catch (e: Exception) {
+            android.util.Log.e("NotificationManager", "Çağrı zil sesi durdurulamadı", e)
+        }
     }
     
     /**
@@ -166,10 +222,11 @@ class NotificationManager(private val context: Context) {
     }
     
     /**
-     * Gelen arama bildirimini iptal eder
+     * Gelen arama bildirimini iptal eder ve çağrı zil sesini durdurur
      */
     fun cancelIncomingCallNotification() {
         notificationManager.cancel(NOTIFICATION_ID_INCOMING_CALL)
+        stopRinging() // Çağrı zil sesini durdur
     }
     
     /**

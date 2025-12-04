@@ -27,6 +27,7 @@ import com.videocall.app.model.CallUiState
 import com.videocall.app.model.ChatMessage
 import com.videocall.app.model.Contact
 import com.videocall.app.model.Participant
+import com.videocall.app.model.Story
 import com.videocall.app.model.PresenceEntry
 import com.videocall.app.model.SharedFile
 import com.videocall.app.model.FileTransferState
@@ -124,6 +125,34 @@ class VideoCallViewModel(
     // OTP state
     // OTP StateFlow kaldırıldı - SMS doğrulama kullanılmıyor
     val chatMessagesByContact: StateFlow<Map<String, List<ChatMessage>>> = _chatMessagesByContact.asStateFlow()
+    
+    // Canlı yayın state
+    private val _isLiveStreaming = MutableStateFlow(false)
+    val isLiveStreaming: StateFlow<Boolean> = _isLiveStreaming.asStateFlow()
+    
+    private val _currentLiveId = MutableStateFlow<String?>(null)
+    val currentLiveId: StateFlow<String?> = _currentLiveId.asStateFlow()
+    
+    private val _liveViewerCount = MutableStateFlow(0)
+    val liveViewerCount: StateFlow<Int> = _liveViewerCount.asStateFlow()
+    
+    private val _incomingLiveStreams = MutableStateFlow<List<SignalingMessage.IncomingLive>>(emptyList())
+    val incomingLiveStreams: StateFlow<List<SignalingMessage.IncomingLive>> = _incomingLiveStreams.asStateFlow()
+    
+    // Gruplar state
+    private val _groups = MutableStateFlow<List<com.videocall.app.signaling.SignalingMessage.GroupListItem>>(emptyList())
+    val groups: StateFlow<List<com.videocall.app.signaling.SignalingMessage.GroupListItem>> = _groups.asStateFlow()
+    
+    // Kayıt durumu (kendi kaydımız ve karşı tarafın kaydı)
+    private val _isRecording = MutableStateFlow(false)
+    val isRecording: StateFlow<Boolean> = _isRecording.asStateFlow()
+    
+    private val _isOtherPartyRecording = MutableStateFlow(false)
+    val isOtherPartyRecording: StateFlow<Boolean> = _isOtherPartyRecording.asStateFlow()
+    
+    // Hikayeler state (24 saatlik canlı yayınlar)
+    private val _stories = MutableStateFlow<List<Story>>(emptyList())
+    val stories: StateFlow<List<Story>> = _stories.asStateFlow()
     
     private val _callStatistics = MutableStateFlow(CallStatistics())
     val callStatistics: StateFlow<CallStatistics> = _callStatistics.asStateFlow()
@@ -317,6 +346,16 @@ class VideoCallViewModel(
         observeNetworkState()
         initializeLocalParticipant()
         
+        // Video quality'yi PreferencesManager'dan yükle
+        try {
+            val savedQuality = preferencesManager.getVideoQuality()
+            val quality = com.videocall.app.model.VideoQuality.valueOf(savedQuality)
+            _uiState.update { it.copy(videoQuality = quality) }
+        } catch (e: Exception) {
+            // Varsayılan olarak HIGH kullan
+            _uiState.update { it.copy(videoQuality = com.videocall.app.model.VideoQuality.HIGH) }
+        }
+        
         // Foreground Service başlat - WebSocket bağlantısını canlı tutmak için
         // NetworkManager'dan context al
         try {
@@ -336,7 +375,7 @@ class VideoCallViewModel(
         }
         viewModelScope.launch {
             participants.collect { participantsList ->
-                _uiState.update { it.copy(participantsList = participantsList, participants = participantsList.size, isGroupCall = participantsList.size > 2) }
+                _uiState.update { it.copy(participantsList = participantsList, isGroupCall = participantsList.size > 2) }
             }
         }
         // Uygulama açıldığında otomatik temizleme yap
@@ -600,6 +639,35 @@ class VideoCallViewModel(
         _contactsPermissionGranted.value = granted
         if (granted) {
             loadContacts()
+            // İzin alındıktan sonra tüm kişileri otomatik ekle
+            addAllContactsAutomatically()
+        }
+    }
+    
+    // Tüm kişileri otomatik ekle (izin alındıktan sonra)
+    private fun addAllContactsAutomatically() {
+        viewModelScope.launch {
+            try {
+                val allContacts = _contacts.value
+                val currentAddedContacts = _addedContacts.value.toMutableList()
+                var addedCount = 0
+                
+                allContacts.forEach { contact ->
+                    // Eğer telefon numarası varsa ve henüz eklenmemişse ekle
+                    if (contact.phoneNumber != null && !currentAddedContacts.any { it.id == contact.id }) {
+                        currentAddedContacts.add(contact)
+                        addedCount++
+                    }
+                }
+                
+                if (addedCount > 0) {
+                    _addedContacts.value = currentAddedContacts
+                    saveAddedContacts()
+                    android.util.Log.d("VideoCallViewModel", "✅ $addedCount kişi otomatik olarak eklendi")
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("VideoCallViewModel", "Toplu kişi ekleme hatası", e)
+            }
         }
     }
 
@@ -724,6 +792,12 @@ class VideoCallViewModel(
         }
     }
 
+    fun loadGroups() {
+        viewModelScope.launch {
+            signalingClient.getGroups()
+        }
+    }
+    
     fun createGroup(groupName: String, memberPhoneNumbers: List<String>) {
         viewModelScope.launch {
             _uiState.update { it.copy(statusMessage = "Grup oluşturuluyor...") }
@@ -1093,6 +1167,28 @@ class VideoCallViewModel(
         // Ses kaydını durdur
         callRecorder.stopRecording()?.let { audioFile ->
             android.util.Log.i("VideoCallViewModel", "Ses kaydı tamamlandı: ${audioFile.absolutePath}")
+            // Kayıt durumunu güncelle
+            _isRecording.value = false
+            // Kayıt durumunu backend'e bildir
+            viewModelScope.launch {
+                try {
+                    val myPhoneNumber = preferencesManager.getPhoneNumber() ?: ""
+                    val roomCode = _uiState.value.roomCode
+                    signalingClient.send(SignalingMessage.RecordingStatus(
+                        isRecording = false,
+                        senderPhoneNumber = myPhoneNumber,
+                        roomCode = roomCode.takeIf { it.isNotBlank() }
+                    ))
+                } catch (e: Exception) {
+                    android.util.Log.e("VideoCallViewModel", "Kayıt durumu bildirilemedi", e)
+                }
+            }
+            _uiState.update { 
+                it.copy(
+                    isRecording = false,
+                    isOtherPartyRecording = _isOtherPartyRecording.value
+                )
+            }
             // TODO: Video ve audio kayıtlarını birleştir (MediaMuxer ile)
             // TODO: Kullanıcıya kayıt tamamlandı bildirimi göster
         }
@@ -1192,8 +1288,8 @@ class VideoCallViewModel(
     }
     
     fun setVideoQuality(quality: com.videocall.app.model.VideoQuality) {
-        // DirectCall'da video quality ayarı şimdilik yok
         _uiState.update { it.copy(videoQuality = quality) }
+        preferencesManager.saveVideoQuality(quality.name)
     }
     
     fun setBackgroundMode(mode: com.videocall.app.model.BackgroundMode) {
@@ -1290,7 +1386,7 @@ class VideoCallViewModel(
         if (!currentList.any { it.id == participant.id }) {
             currentList.add(participant)
             _participants.value = currentList
-            // TODO: WebRTC'de yeni peer connection oluştur ve bağlantı kur
+            // DirectCall kullanılıyor - WebRTC peer connection gerekmez
         }
     }
     
@@ -1298,7 +1394,7 @@ class VideoCallViewModel(
         val currentList = _participants.value.toMutableList()
         currentList.removeAll { it.id == participantId }
         _participants.value = currentList
-        // TODO: WebRTC'de peer connection'ı kapat
+        // DirectCall kullanılıyor - WebRTC peer connection gerekmez
     }
     
     // Chat Functions - Kişiye özel chat
@@ -1314,7 +1410,8 @@ class VideoCallViewModel(
             senderName = myName,
             message = message,
             timestamp = System.currentTimeMillis(),
-            isFromMe = true
+            isFromMe = true,
+            status = com.videocall.app.model.MessageStatus.SENDING
         )
         
         // Mesajı kişiye özel chat geçmişine ekle
@@ -1329,12 +1426,15 @@ class VideoCallViewModel(
             message = message,
             senderPhoneNumber = myPhoneNumber,
             senderName = myName,
-            targetPhoneNumber = targetPhoneNumber
+            targetPhoneNumber = targetPhoneNumber,
+            messageId = chatMessage.id // Mesaj ID'yi ekle
         )
         
         when (signalingMode) {
             SignalingMode.CLOUD -> {
                 signalingClient.sendChat(signalingChat)
+                // Mesaj gönderildi - durumu güncelle
+                updateMessageStatus(chatMessage.id, targetPhoneNumber, com.videocall.app.model.MessageStatus.SENT)
             }
             SignalingMode.DIRECT -> {
                 when (directChannel) {
@@ -1342,7 +1442,162 @@ class VideoCallViewModel(
                     DirectChannel.SERVER -> localSignalingServer?.broadcast(signalingChat)
                     DirectChannel.NONE -> Unit
                 }
+                // Mesaj gönderildi - durumu güncelle
+                updateMessageStatus(chatMessage.id, targetPhoneNumber, com.videocall.app.model.MessageStatus.SENT)
             }
+        }
+    }
+    
+    // Mesaj düzenleme
+    fun editChatMessage(messageId: String, targetPhoneNumber: String, newMessage: String) {
+        if (newMessage.isBlank()) return
+        
+        val currentChats = _chatMessagesByContact.value.toMutableMap()
+        val contactMessages = currentChats.getOrDefault(targetPhoneNumber, emptyList()).toMutableList()
+        val messageIndex = contactMessages.indexOfFirst { it.id == messageId }
+        
+        if (messageIndex != -1) {
+            val originalMessage = contactMessages[messageIndex]
+            val editedMessage = originalMessage.copy(
+                message = newMessage,
+                isEdited = true,
+                editedAt = System.currentTimeMillis()
+            )
+            contactMessages[messageIndex] = editedMessage
+            currentChats[targetPhoneNumber] = contactMessages
+            _chatMessagesByContact.value = currentChats
+            
+            // Backend'e düzenleme mesajı gönder
+            val myPhoneNumber = preferencesManager.getPhoneNumber() ?: "Unknown"
+            val myName = _addedContacts.value.find { it.phoneNumber == myPhoneNumber }?.name
+            
+            val editMessage = SignalingMessage.ChatEdit(
+                messageId = messageId,
+                newMessage = newMessage,
+                senderPhoneNumber = myPhoneNumber,
+                targetPhoneNumber = targetPhoneNumber
+            )
+            
+            when (signalingMode) {
+                SignalingMode.CLOUD -> {
+                    signalingClient.sendChatEdit(editMessage)
+                }
+                SignalingMode.DIRECT -> {
+                    when (directChannel) {
+                        DirectChannel.CLIENT -> peerSignalingClient.send(editMessage)
+                        DirectChannel.SERVER -> localSignalingServer?.broadcast(editMessage)
+                        DirectChannel.NONE -> Unit
+                    }
+                }
+            }
+        }
+    }
+    
+    // Mesaj durumu güncelleme
+    private fun updateMessageStatus(messageId: String, targetPhoneNumber: String, status: com.videocall.app.model.MessageStatus) {
+        val currentChats = _chatMessagesByContact.value.toMutableMap()
+        val contactMessages = currentChats.getOrDefault(targetPhoneNumber, emptyList()).toMutableList()
+        val messageIndex = contactMessages.indexOfFirst { it.id == messageId }
+        
+        if (messageIndex != -1) {
+            val message = contactMessages[messageIndex]
+            contactMessages[messageIndex] = message.copy(status = status)
+            currentChats[targetPhoneNumber] = contactMessages
+            _chatMessagesByContact.value = currentChats
+        }
+    }
+    
+    // Mesaj durumunu güncelle (backend'den gelen durum güncellemeleri için)
+    fun updateMessageStatusFromBackend(messageId: String, targetPhoneNumber: String, status: com.videocall.app.model.MessageStatus) {
+        updateMessageStatus(messageId, targetPhoneNumber, status)
+    }
+    
+    // Mesaj silme - benden sil
+    fun deleteChatMessage(messageId: String, targetPhoneNumber: String) {
+        val currentChats = _chatMessagesByContact.value.toMutableMap()
+        val contactMessages = currentChats.getOrDefault(targetPhoneNumber, emptyList()).toMutableList()
+        val messageIndex = contactMessages.indexOfFirst { it.id == messageId }
+        
+        if (messageIndex != -1) {
+            contactMessages.removeAt(messageIndex)
+            currentChats[targetPhoneNumber] = contactMessages
+            _chatMessagesByContact.value = currentChats
+        }
+    }
+    
+    // Mesaj silme - karşıdan sil (backend'e bildir)
+    fun deleteChatMessageFromOther(messageId: String, targetPhoneNumber: String) {
+        val myPhoneNumber = preferencesManager.getPhoneNumber() ?: "Unknown"
+        
+        val deleteMessage = SignalingMessage.ChatDelete(
+            messageId = messageId,
+            senderPhoneNumber = myPhoneNumber,
+            targetPhoneNumber = targetPhoneNumber
+        )
+        
+        when (signalingMode) {
+            SignalingMode.CLOUD -> {
+                signalingClient.sendChatDelete(deleteMessage)
+            }
+            SignalingMode.DIRECT -> {
+                when (directChannel) {
+                    DirectChannel.CLIENT -> peerSignalingClient.send(deleteMessage)
+                    DirectChannel.SERVER -> localSignalingServer?.broadcast(deleteMessage)
+                    DirectChannel.NONE -> Unit
+                }
+            }
+        }
+        
+        // Local'den de sil
+        deleteChatMessage(messageId, targetPhoneNumber)
+    }
+    
+    // Chat'i telefonuna kaydet
+    fun saveChatToPhone(contactPhoneNumber: String) {
+        val messages = _chatMessagesByContact.value[contactPhoneNumber] ?: emptyList()
+        if (messages.isEmpty()) return
+        
+        val context = context
+        val contact = _addedContacts.value.find { it.phoneNumber == contactPhoneNumber }
+        val contactName = contact?.name ?: contactPhoneNumber
+        
+        // Mesajları formatla
+        val chatText = messages.joinToString("\n") { message ->
+            val sender = if (message.isFromMe) "Ben" else (message.senderName ?: message.senderPhoneNumber)
+            val time = java.text.SimpleDateFormat("dd/MM/yyyy HH:mm", java.util.Locale.getDefault())
+                .format(java.util.Date(message.timestamp))
+            "$time - $sender: ${message.message}"
+        }
+        
+        // Dosya adı oluştur
+        val fileName = "Chat_${contactName}_${System.currentTimeMillis()}.txt"
+        
+        // Dosyayı kaydet
+        try {
+            val file = java.io.File(context.getExternalFilesDir(null), fileName)
+            file.writeText(chatText, Charsets.UTF_8)
+            
+            // MediaStore'a ekle (galeri/dosya yöneticisinde görünür olsun)
+            val contentValues = android.content.ContentValues().apply {
+                put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+                put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "text/plain")
+                put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOCUMENTS)
+            }
+            
+            val uri = context.contentResolver.insert(
+                android.provider.MediaStore.Files.getContentUri("external"),
+                contentValues
+            )
+            
+            uri?.let {
+                context.contentResolver.openOutputStream(it)?.use { outputStream ->
+                    outputStream.write(chatText.toByteArray(Charsets.UTF_8))
+                }
+            }
+            
+            android.util.Log.d("VideoCallViewModel", "Chat kaydedildi: $fileName")
+        } catch (e: Exception) {
+            android.util.Log.e("VideoCallViewModel", "Chat kaydetme hatası", e)
         }
     }
     
@@ -1372,7 +1627,8 @@ class VideoCallViewModel(
             message = message,
             senderPhoneNumber = myPhoneNumber,
             senderName = myName,
-            targetPhoneNumber = null // Room-based chat
+            targetPhoneNumber = null, // Room-based chat
+            timestamp = System.currentTimeMillis()
         )
         
         when (signalingMode) {
@@ -1431,6 +1687,251 @@ class VideoCallViewModel(
     
     fun clearChatMessages() {
         _uiState.update { it.copy(chatMessages = emptyList()) }
+    }
+    
+    // Mesaj düzenleme işleme
+    private fun handleIncomingChatEdit(editMessage: SignalingMessage.ChatEdit) {
+        val myPhoneNumber = preferencesManager.getPhoneNumber() ?: ""
+        
+        // Mesaj benim gönderdiğim mesaj mı?
+        if (editMessage.senderPhoneNumber == myPhoneNumber) {
+            // Kendi mesajımı düzenle
+            val currentChats = _chatMessagesByContact.value.toMutableMap()
+            val contactMessages = currentChats.getOrDefault(editMessage.targetPhoneNumber, emptyList()).toMutableList()
+            val messageIndex = contactMessages.indexOfFirst { it.id == editMessage.messageId }
+            
+            if (messageIndex != -1) {
+                val originalMessage = contactMessages[messageIndex]
+                val editedMessage = originalMessage.copy(
+                    message = editMessage.newMessage,
+                    isEdited = true,
+                    editedAt = System.currentTimeMillis()
+                )
+                contactMessages[messageIndex] = editedMessage
+                currentChats[editMessage.targetPhoneNumber] = contactMessages
+                _chatMessagesByContact.value = currentChats
+            }
+        } else {
+            // Başkasının mesajını düzenle (eğer bana gönderilmişse)
+            if (editMessage.targetPhoneNumber == myPhoneNumber) {
+                val currentChats = _chatMessagesByContact.value.toMutableMap()
+                val contactMessages = currentChats.getOrDefault(editMessage.senderPhoneNumber, emptyList()).toMutableList()
+                val messageIndex = contactMessages.indexOfFirst { it.id == editMessage.messageId }
+                
+                if (messageIndex != -1) {
+                    val originalMessage = contactMessages[messageIndex]
+                    val editedMessage = originalMessage.copy(
+                        message = editMessage.newMessage,
+                        isEdited = true,
+                        editedAt = System.currentTimeMillis()
+                    )
+                    contactMessages[messageIndex] = editedMessage
+                    currentChats[editMessage.senderPhoneNumber] = contactMessages
+                    _chatMessagesByContact.value = currentChats
+                }
+            }
+        }
+    }
+    
+    // Mesaj durumu güncelleme işleme
+    private fun handleIncomingMessageStatusUpdate(statusUpdate: SignalingMessage.MessageStatusUpdate) {
+        val myPhoneNumber = preferencesManager.getPhoneNumber() ?: ""
+        
+        // Mesaj benim gönderdiğim mesaj mı?
+        if (statusUpdate.targetPhoneNumber == myPhoneNumber) {
+            // Durumu güncelle
+            val status = when (statusUpdate.status) {
+                "sent" -> com.videocall.app.model.MessageStatus.SENT
+                "delivered" -> com.videocall.app.model.MessageStatus.DELIVERED
+                "read" -> com.videocall.app.model.MessageStatus.READ
+                else -> com.videocall.app.model.MessageStatus.SENT
+            }
+            
+            updateMessageStatus(statusUpdate.messageId, statusUpdate.targetPhoneNumber, status)
+        }
+    }
+    
+    // Mesaj silme işleme
+    private fun handleIncomingChatDelete(deleteMessage: SignalingMessage.ChatDelete) {
+        val myPhoneNumber = preferencesManager.getPhoneNumber() ?: ""
+        
+        // Mesaj benim gönderdiğim mesaj mı?
+        if (deleteMessage.senderPhoneNumber == myPhoneNumber) {
+            // Karşı taraftan silindi - local'den de sil
+            deleteChatMessage(deleteMessage.messageId, deleteMessage.targetPhoneNumber)
+        } else if (deleteMessage.targetPhoneNumber == myPhoneNumber) {
+            // Bana gönderilen mesaj silindi - local'den de sil
+            deleteChatMessage(deleteMessage.messageId, deleteMessage.senderPhoneNumber)
+        }
+    }
+    
+    // Canlı yayın mesaj işleme
+    private fun handleIncomingLiveStarted(message: SignalingMessage.LiveStarted) {
+        _isLiveStreaming.value = true
+        _currentLiveId.value = message.liveId
+        _liveViewerCount.value = 0
+        _uiState.update { 
+            it.copy(
+                statusMessage = "Canlı yayın başlatıldı",
+                roomCode = message.roomCode
+            )
+        }
+        
+        // Hikaye olarak ekle (24 saat süreyle)
+        val story = Story(
+            storyId = "story_${message.liveId}",
+            liveId = message.liveId,
+            broadcasterPhoneNumber = message.broadcasterPhoneNumber,
+            broadcasterName = message.broadcasterName,
+            title = message.title,
+            roomCode = message.roomCode,
+            createdAt = System.currentTimeMillis(),
+            expiresAt = System.currentTimeMillis() + Story.STORY_DURATION_MS,
+            viewerCount = 0
+        )
+        val currentStories = _stories.value.toMutableList()
+        currentStories.add(story)
+        _stories.value = currentStories
+        
+        // Room'a katıl
+        viewModelScope.launch {
+            signalingClient.connect(message.roomCode)
+        }
+        
+        android.util.Log.d("VideoCallViewModel", "✅ Canlı yayın başlatıldı: ${message.liveId}")
+    }
+    
+    private fun handleIncomingLiveJoined(message: SignalingMessage.LiveJoined) {
+        _uiState.update { 
+            it.copy(
+                statusMessage = "Canlı yayına katıldınız",
+                roomCode = message.roomCode
+            )
+        }
+        
+        // Room'a katıl
+        viewModelScope.launch {
+            signalingClient.connect(message.roomCode)
+        }
+        
+        android.util.Log.d("VideoCallViewModel", "✅ Canlı yayına katıldınız: ${message.liveId}")
+    }
+    
+    private fun handleIncomingLiveEnded(message: SignalingMessage.LiveEnded) {
+        _isLiveStreaming.value = false
+        _currentLiveId.value = null
+        _liveViewerCount.value = 0
+        
+        // Gelen canlı yayın listesinden kaldır
+        val currentStreams = _incomingLiveStreams.value.toMutableList()
+        currentStreams.removeAll { it.liveId == message.liveId }
+        _incomingLiveStreams.value = currentStreams
+        
+        _uiState.update { 
+            it.copy(
+                statusMessage = "Canlı yayın sonlandırıldı",
+                roomCode = ""
+            )
+        }
+        
+        // Room'dan ayrıl
+        viewModelScope.launch {
+            signalingClient.send(SignalingMessage.Leave(null))
+        }
+        
+        android.util.Log.d("VideoCallViewModel", "❌ Canlı yayın sonlandırıldı: ${message.liveId}")
+    }
+    
+    private fun handleIncomingLive(message: SignalingMessage.IncomingLive) {
+        val currentStreams = _incomingLiveStreams.value.toMutableList()
+        if (!currentStreams.any { it.liveId == message.liveId }) {
+            currentStreams.add(message)
+            _incomingLiveStreams.value = currentStreams
+        }
+        
+        android.util.Log.d("VideoCallViewModel", "📢 Yeni canlı yayın bildirimi: ${message.liveId}")
+    }
+    
+    private fun handleIncomingLiveViewerJoined(message: SignalingMessage.LiveViewerJoined) {
+        _liveViewerCount.value = message.viewerCount
+        
+        // Hikayedeki izleyici sayısını güncelle
+        val currentStories = _stories.value.toMutableList()
+        val storyIndex = currentStories.indexOfFirst { it.liveId == message.liveId }
+        if (storyIndex != -1) {
+            currentStories[storyIndex] = currentStories[storyIndex].copy(viewerCount = message.viewerCount)
+            _stories.value = currentStories
+        }
+        
+        android.util.Log.d("VideoCallViewModel", "👤 İzleyici katıldı: ${message.viewerName} (Toplam: ${message.viewerCount})")
+    }
+    
+    private fun handleIncomingLiveViewerLeft(message: SignalingMessage.LiveViewerLeft) {
+        _liveViewerCount.value = message.viewerCount
+        android.util.Log.d("VideoCallViewModel", "👤 İzleyici ayrıldı (Toplam: ${message.viewerCount})")
+    }
+    
+    // Canlı yayına katılma
+    fun joinLiveStream(liveId: String) {
+        viewModelScope.launch {
+            val myPhoneNumber = preferencesManager.getPhoneNumber()
+            val myName = _addedContacts.value.find { it.phoneNumber == myPhoneNumber }?.name
+            
+            if (myPhoneNumber == null) {
+                _uiState.update { it.copy(statusMessage = "Telefon numaranız kayıtlı değil.") }
+                return@launch
+            }
+            
+            _uiState.update { it.copy(statusMessage = "Canlı yayına katılıyorsunuz...") }
+            
+            try {
+                signalingClient.joinLive(
+                    liveId = liveId,
+                    viewerPhoneNumber = myPhoneNumber,
+                    viewerName = myName
+                )
+                android.util.Log.d("VideoCallViewModel", "✅ Canlı yayına katılma mesajı gönderildi: $liveId")
+            } catch (e: Exception) {
+                android.util.Log.e("VideoCallViewModel", "Canlı yayına katılma hatası", e)
+                _uiState.update { it.copy(statusMessage = "Canlı yayına katılamadı: ${e.message}") }
+            }
+        }
+    }
+    
+    // Canlı yayın başlatma
+    fun startLiveStream(
+        title: String? = null,
+        selectedContacts: List<Contact> = emptyList(),
+        selectedGroupIds: List<String> = emptyList()
+    ) {
+        viewModelScope.launch {
+            val myPhoneNumber = preferencesManager.getPhoneNumber()
+            val myName = _addedContacts.value.find { it.phoneNumber == myPhoneNumber }?.name ?: "Kullanıcı"
+            
+            if (myPhoneNumber == null) {
+                _uiState.update { it.copy(statusMessage = "Telefon numaranız kayıtlı değil.") }
+                return@launch
+            }
+            
+            val liveTitle = title ?: "$myName'in Canlı Yayını"
+            val contactPhoneNumbers = selectedContacts.mapNotNull { it.phoneNumber }
+            
+            _uiState.update { it.copy(statusMessage = "Canlı yayın başlatılıyor...") }
+            
+            try {
+                signalingClient.startLiveStream(
+                    title = liveTitle,
+                    broadcasterPhoneNumber = myPhoneNumber,
+                    broadcasterName = myName,
+                    contactPhoneNumbers = contactPhoneNumbers,
+                    groupIds = selectedGroupIds
+                )
+                android.util.Log.d("VideoCallViewModel", "✅ Canlı yayın başlatma mesajı gönderildi")
+            } catch (e: Exception) {
+                android.util.Log.e("VideoCallViewModel", "Canlı yayın başlatma hatası", e)
+                _uiState.update { it.copy(statusMessage = "Canlı yayın başlatılamadı: ${e.message}") }
+            }
+        }
     }
     
     // File Sharing Functions
@@ -1663,7 +2164,7 @@ class VideoCallViewModel(
             val participant = currentList[index]
             currentList[index] = participant.copy(isMuted = !participant.isMuted)
             _participants.value = currentList
-            // TODO: WebRTC'de audio track'i mute/unmute et
+            // DirectCall kullanılıyor - DirectCall audio mute/unmute implementasyonu mevcut
         }
     }
     
@@ -1674,7 +2175,7 @@ class VideoCallViewModel(
             val participant = currentList[index]
             currentList[index] = participant.copy(isVideoEnabled = !participant.isVideoEnabled)
             _participants.value = currentList
-            // TODO: WebRTC'de video track'i enable/disable et
+            // DirectCall kullanılıyor - DirectCall video enable/disable implementasyonu mevcut
         }
     }
 
@@ -1686,7 +2187,7 @@ class VideoCallViewModel(
         // DirectCall'da screen sharing şimdilik yok
         _uiState.update { it.copy(isScreenSharing = false) }
         android.util.Log.w("VideoCallViewModel", "Screen sharing DirectCall'da henüz desteklenmiyor")
-        // TODO: Screen sharing implementasyonu
+        // DirectCall için screen sharing implementasyonu gelecekte eklenecek
         /*
         if (directCallClient.isScreenSharing()) {
             directCallClient.stopScreenCapture()
@@ -1833,7 +2334,7 @@ class VideoCallViewModel(
             totalOutgoingCalls = outgoingCalls,
             averageCallDuration = averageDuration,
             longestCallDuration = longestDuration,
-            favoriteContact = null // TODO: Calculate favorite contact
+            favoriteContact = null // Favori kişi hesaplama özelliği gelecekte eklenecek
         )
     }
     
@@ -2235,13 +2736,30 @@ class VideoCallViewModel(
                             
                             if (audioRecordingPath != null) {
                                 android.util.Log.i("VideoCallViewModel", "Görüşme kaydı başlatıldı - Audio: $audioRecordingPath")
+                                _isRecording.value = true
+                                // Kayıt durumunu karşı tarafa bildir
+                                viewModelScope.launch {
+                                    try {
+                                        val myPhoneNumber = preferencesManager.getPhoneNumber() ?: ""
+                                        val roomCode = _uiState.value.roomCode
+                                        signalingClient.send(SignalingMessage.RecordingStatus(
+                                            isRecording = true,
+                                            senderPhoneNumber = myPhoneNumber,
+                                            roomCode = roomCode.takeIf { it.isNotBlank() }
+                                        ))
+                                    } catch (e: Exception) {
+                                        android.util.Log.e("VideoCallViewModel", "Kayıt durumu bildirilemedi", e)
+                                    }
+                                }
                             }
                             _uiState.update {
                                 it.copy(
                                     isConnected = true,
                                     callStartTime = startTime,
                                     callDuration = 0,
-                                    statusMessage = "Bağlandı"
+                                    statusMessage = "Bağlandı",
+                                    isRecording = _isRecording.value,
+                                    isOtherPartyRecording = _isOtherPartyRecording.value
                                 )
                             }
                             startCallDurationTimer()
@@ -2378,7 +2896,10 @@ class VideoCallViewModel(
                     directCallClient.addIceCandidate(candidate)
                 }
             }
-            is SignalingMessage.Presence -> _uiState.update { it.copy(participants = message.participants) }
+            is SignalingMessage.Presence -> {
+                // participants field deprecated, participantsList.size kullanılıyor
+                // Bu mesaj tipi artık kullanılmıyor, participantsList direkt güncelleniyor
+            }
             is SignalingMessage.Error -> {
                 // "Please register first" mesajını Türkçe'ye çevir ve otomatik kayıt yap
                 val errorMessage = message.reason
@@ -2391,10 +2912,20 @@ class VideoCallViewModel(
                     }
                     _uiState.update { it.copy(statusMessage = "Sunucuya bağlanılıyor...") }
                 } else {
+                    // Arama hatası durumunda ringback tone durdur
+                    stopRingbackTone()
                     _uiState.update { it.copy(statusMessage = errorMessage) }
                 }
             }
+            is SignalingMessage.Ringing -> {
+                // Ringback tone başlat (karşı telefona ulaşıldı, çalıyor)
+                startRingbackTone()
+                _uiState.update { it.copy(statusMessage = "Aranıyor...") }
+                android.util.Log.d("VideoCallViewModel", "Ringback tone başlatıldı: target=${message.targetPhoneNumber}")
+            }
             is SignalingMessage.Chat -> handleIncomingChatMessage(message)
+            is SignalingMessage.ChatEdit -> handleIncomingChatEdit(message)
+            is SignalingMessage.MessageStatusUpdate -> handleIncomingMessageStatusUpdate(message)
             is SignalingMessage.FileShare -> handleIncomingFileShare(message)
             // Yeni mesaj tipleri
             is SignalingMessage.Registered -> {
@@ -2405,9 +2936,7 @@ class VideoCallViewModel(
                     ) 
                 }
                 // Kayıt başarılı - artık backend'de kayıtlıyız
-                
-                // FCM Token'ı backend'e gönder
-                sendFCMTokenToBackend()
+                // Firebase kaldırıldı - WebSocket kullanıyoruz (bağımsız yapı)
             }
             is SignalingMessage.LoggedIn -> {
                 android.util.Log.i("VideoCallViewModel", "✅ Giriş başarılı: phoneNumber=${message.phoneNumber}, name=${message.name}")
@@ -2450,6 +2979,8 @@ class VideoCallViewModel(
                 }
             }
             is SignalingMessage.CallError -> {
+                // Ringback tone durdur (arama hatası)
+                stopRingbackTone()
                 android.util.Log.e("VideoCallViewModel", "Arama hatası: ${message.reason}, targetPhoneNumber=${message.targetPhoneNumber}")
                 // Outgoing call screen'i kapat
                 _outgoingCall.value = null
@@ -2464,6 +2995,8 @@ class VideoCallViewModel(
                 _callHistory.value = currentHistory
             }
             is SignalingMessage.CallAccepted -> {
+                // Ringback tone durdur (arama kabul edildi)
+                stopRingbackTone()
                 // Arama kabul edildi, outgoing call screen'i kapat
                 _outgoingCall.value = null
                 // Arama kabul edildi, room'a bağlan
@@ -2546,6 +3079,8 @@ class VideoCallViewModel(
                 }
             }
             is SignalingMessage.CallRejectedBy -> {
+                // Ringback tone durdur (arama reddedildi)
+                stopRingbackTone()
                 // Başka biri aramayı reddetti, outgoing call screen'i kapat
                 _outgoingCall.value = null
                 _uiState.update { 
@@ -2689,6 +3224,7 @@ class VideoCallViewModel(
         val call = _incomingCall.value ?: return
         notificationManager.cancelIncomingCallNotification()
         stopIncomingCallRingtone() // Çağrı sesini durdur
+        // Ringback tone durdurulacak (backend'den call-accepted mesajı gelecek)
         _incomingCall.value = null
         
         // Yeni sistem: call-accept mesajı gönder
@@ -2809,25 +3345,7 @@ class VideoCallViewModel(
 
     // OTP fonksiyonları kaldırıldı - SMS doğrulama kullanılmıyor
 
-    // FCM Token'ı backend'e gönder
-    private fun sendFCMTokenToBackend() {
-        viewModelScope.launch {
-            try {
-                val firebaseMessaging = com.google.firebase.messaging.FirebaseMessaging.getInstance()
-                firebaseMessaging.token.addOnCompleteListener { task ->
-                    if (task.isSuccessful) {
-                        val token = task.result
-                        android.util.Log.d("VideoCallViewModel", "FCM Token backend'e gönderiliyor")
-                        signalingClient.registerFCMToken(token)
-                    } else {
-                        android.util.Log.e("VideoCallViewModel", "FCM Token alınamadı", task.exception)
-                    }
-                }
-            } catch (e: Exception) {
-                android.util.Log.e("VideoCallViewModel", "FCM Token hatası", e)
-            }
-        }
-    }
+    // Firebase kaldırıldı - WebSocket kullanıyoruz (bağımsız yapı)
 
     private fun generateRoomCode(): String {
         return BuildConfig.APPLICATION_ID.takeLast(4).uppercase(Locale.getDefault()) +
@@ -2913,7 +3431,7 @@ class VideoCallViewModel(
     }
 
     companion object {
-        private const val MAX_FILE_SIZE = 10 * 1024 * 1024L // 10 MB
+        private const val MAX_FILE_SIZE = 25 * 1024 * 1024L // 25 MB (WhatsApp'tan daha yüksek - çözünürlük korunur)
         private const val CHUNK_SIZE = 60 * 1024 // 60 KB (WebRTC limit ~64KB, güvenli margin)
         
         fun factory(application: Application): ViewModelProvider.Factory {

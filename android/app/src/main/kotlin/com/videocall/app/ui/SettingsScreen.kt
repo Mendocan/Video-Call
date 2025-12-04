@@ -1,73 +1,92 @@
 package com.videocall.app.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Cancel
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Contacts
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Switch
-import androidx.compose.material3.Text
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.AlertDialog
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import androidx.compose.runtime.rememberCoroutineScope
-import kotlinx.coroutines.launch
+import androidx.core.content.ContextCompat
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import com.videocall.app.R
 import com.videocall.app.data.PreferencesManager
 import com.videocall.app.model.CallStatistics
-import com.videocall.app.model.UserStatus
 import com.videocall.app.model.UserPresence
-import androidx.compose.runtime.collectAsState
-import kotlinx.coroutines.flow.StateFlow
-import androidx.compose.material.icons.filled.QrCode
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material.icons.filled.VisibilityOff
-import androidx.compose.material.icons.filled.Share
-import androidx.compose.material3.Icon
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.foundation.layout.size
+import com.videocall.app.model.UserStatus
 import com.videocall.app.utils.AppShareManager
-import android.content.Intent
-import androidx.compose.foundation.Image
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.ui.layout.ContentScale
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import com.videocall.app.utils.LocaleHelper
-import android.content.res.Configuration
-import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.height
-import androidx.compose.material.icons.Icons
-import com.videocall.app.R
-import android.graphics.Bitmap
+import com.videocall.app.utils.CameraCapabilities
+import com.videocall.app.utils.ImagePicker
+import com.videocall.app.model.VideoQuality
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.clip
+import coil.compose.rememberAsyncImagePainter
+import coil.request.ImageRequest
+import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.Delete
+import com.videocall.app.ui.theme.Teal
+import kotlinx.coroutines.launch
 
 @Composable
 fun SettingsScreen(
+    modifier: Modifier = Modifier,
     callHistory: List<com.videocall.app.model.CallHistory> = emptyList(),
-    onCalculateStatistics: () -> CallStatistics = { CallStatistics() },
     onEnable2FA: () -> Pair<String, List<String>> = { Pair("", emptyList()) },
     onDisable2FA: () -> Unit = {},
     onVerify2FA: (String) -> Boolean = { false },
@@ -83,25 +102,44 @@ fun SettingsScreen(
     onEnableVoiceCommands: () -> Unit = {},
     onDisableVoiceCommands: () -> Unit = {},
     isVoiceCommandsEnabled: Boolean = false,
-    modifier: Modifier = Modifier
+    onLogout: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val preferencesManager = remember { PreferencesManager(context) }
-    val configuration = LocalConfiguration.current
+    LocalConfiguration.current
     val coroutineScope = rememberCoroutineScope()
-    var currentLanguage by remember { 
-        mutableStateOf(preferencesManager.getLanguage() ?: "tr")
-    }
-    var blockUnknownNumbers by remember { 
-        mutableStateOf(preferencesManager.isBlockUnknownNumbers()) 
+    
+    // İzin launcher'ları
+    val contactsPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { _ ->
+        // İzin durumu değişti, UI otomatik güncellenecek
     }
     
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { _ ->
+        // İzin durumu değişti, UI otomatik güncellenecek
+    }
+    
+    val microphonePermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { _ ->
+        // İzin durumu değişti, UI otomatik güncellenecek
+    }
+    var currentLanguage by remember {
+        mutableStateOf(preferencesManager.getLanguage() ?: "tr")
+    }
+    var blockUnknownNumbers by remember {
+        mutableStateOf(preferencesManager.isBlockUnknownNumbers())
+    }
+
     // User Status
     var currentStatus by remember {
         mutableStateOf(
             try {
                 UserStatus.valueOf(preferencesManager.getUserStatus())
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 UserStatus.ONLINE
             }
         )
@@ -110,7 +148,7 @@ fun SettingsScreen(
         mutableStateOf(preferencesManager.getCustomStatusMessage() ?: "")
     }
     var showStatusDropdown by remember { mutableStateOf(false) }
-    
+
     val statistics = remember(callHistory) {
         if (callHistory.isEmpty()) {
             CallStatistics()
@@ -119,14 +157,15 @@ fun SettingsScreen(
             val totalDuration = callHistory.sumOf { it.duration }
             val totalIncomingCalls = callHistory.count { it.callType == com.videocall.app.model.CallType.INCOMING }
             val totalOutgoingCalls = callHistory.count { it.callType == com.videocall.app.model.CallType.OUTGOING }
-            val averageCallDuration = if (totalCalls > 0) totalDuration / totalCalls else 0L
+            // totalCalls > 0 kontrolü gereksiz çünkü else bloğundayız (callHistory.isEmpty() == false)
+            val averageCallDuration = totalDuration / totalCalls
             val longestCallDuration = callHistory.maxOfOrNull { it.duration } ?: 0L
-            
+
             val contactCallCounts = callHistory
                 .groupBy { it.contactName ?: it.phoneNumber }
                 .mapValues { it.value.size }
             val favoriteContact = contactCallCounts.maxByOrNull { it.value }?.key
-            
+
             CallStatistics(
                 totalCalls = totalCalls,
                 totalDuration = totalDuration,
@@ -150,7 +189,267 @@ fun SettingsScreen(
             text = "Ayarlar",
             style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold)
         )
-        
+
+        // İzinler
+        Card(
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text = "İzinler",
+                    style = MaterialTheme.typography.titleMedium
+                )
+                PermissionRow(
+                    permissionName = "Rehber",
+                    description = "Kişileri eklemek ve görüntülemek için",
+                    icon = Icons.Default.Contacts,
+                    isGranted = ContextCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.READ_CONTACTS
+                    ) == PackageManager.PERMISSION_GRANTED,
+                    onClick = {
+                        if (ContextCompat.checkSelfPermission(
+                                context,
+                                Manifest.permission.READ_CONTACTS
+                            ) != PackageManager.PERMISSION_GRANTED
+                        ) {
+                            contactsPermissionLauncher.launch(Manifest.permission.READ_CONTACTS)
+                        }
+                    }
+                )
+                PermissionRow(
+                    permissionName = "Kamera",
+                    description = "Video görüşmeleri için",
+                    icon = Icons.Default.CameraAlt,
+                    isGranted = ContextCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.CAMERA
+                    ) == PackageManager.PERMISSION_GRANTED,
+                    onClick = {
+                        if (ContextCompat.checkSelfPermission(
+                                context,
+                                Manifest.permission.CAMERA
+                            ) != PackageManager.PERMISSION_GRANTED
+                        ) {
+                            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                        }
+                    }
+                )
+                PermissionRow(
+                    permissionName = "Mikrofon",
+                    description = "Sesli görüşmeler için",
+                    icon = Icons.Default.Mic,
+                    isGranted = ContextCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.RECORD_AUDIO
+                    ) == PackageManager.PERMISSION_GRANTED,
+                    onClick = {
+                        if (ContextCompat.checkSelfPermission(
+                                context,
+                                Manifest.permission.RECORD_AUDIO
+                            ) != PackageManager.PERMISSION_GRANTED
+                        ) {
+                            microphonePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        }
+                    }
+                )
+            }
+        }
+
+        // Profil Fotoğrafı
+        Card(
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "Profil Fotoğrafı",
+                    style = MaterialTheme.typography.titleMedium
+                )
+                
+                var profilePhotoUri by remember {
+                    mutableStateOf(preferencesManager.getProfilePhotoUri())
+                }
+                var showPhotoPickerDialog by remember { mutableStateOf(false) }
+                
+                val imagePickerLauncher = ImagePicker.rememberImagePickerLauncher { uri ->
+                    if (uri != null) {
+                        val fileName = "profile_${System.currentTimeMillis()}.jpg"
+                        val copiedUri = ImagePicker.copyUriToAppStorage(context, uri, fileName)
+                        if (copiedUri != null) {
+                            profilePhotoUri = copiedUri.toString()
+                            preferencesManager.saveProfilePhotoUri(copiedUri.toString())
+                        }
+                    }
+                    showPhotoPickerDialog = false
+                }
+                
+                // Profil fotoğrafı veya avatar
+                Box(
+                    modifier = Modifier
+                        .size(120.dp)
+                        .clip(CircleShape)
+                        .border(3.dp, Teal, CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    val photoUri = profilePhotoUri
+                    if (photoUri != null && photoUri.isNotBlank()) {
+                        Image(
+                            painter = rememberAsyncImagePainter(
+                                ImageRequest.Builder(context)
+                                    .data(photoUri)
+                                    .crossfade(true)
+                                    .build()
+                            ),
+                            contentDescription = "Profil Fotoğrafı",
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clip(CircleShape),
+                            contentScale = ContentScale.Crop
+                        )
+                    } else {
+                        // Varsayılan avatar (baş harfler)
+                        val phoneNumber = preferencesManager.getPhoneNumber()
+                        val userName = phoneNumber?.let { 
+                            // Telefon numarasından isim bulmaya çalış
+                            // Şimdilik sadece baş harf göster
+                            phoneNumber.take(1).uppercase()
+                        } ?: "?"
+                        
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(Teal.copy(alpha = 0.3f), CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = userName,
+                                style = MaterialTheme.typography.headlineLarge,
+                                color = Teal,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+                
+                // Fotoğraf seçme butonları
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = { showPhotoPickerDialog = true },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PhotoLibrary,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(Modifier.size(4.dp))
+                        Text("Fotoğraf Seç")
+                    }
+                    
+                    if (profilePhotoUri != null) {
+                        OutlinedButton(
+                            onClick = {
+                                profilePhotoUri = null
+                                preferencesManager.removeProfilePhoto()
+                            },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = MaterialTheme.colorScheme.error
+                            )
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Delete,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(Modifier.size(4.dp))
+                            Text("Kaldır")
+                        }
+                    }
+                }
+                
+                // Fotoğraf seçim dialog'u
+                if (showPhotoPickerDialog) {
+                    AlertDialog(
+                        onDismissRequest = { showPhotoPickerDialog = false },
+                        title = { Text("Profil Fotoğrafı Seç") },
+                        text = {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text("Fotoğrafınızı nereden seçmek istersiniz?")
+                            }
+                        },
+                        confirmButton = {
+                            Button(
+                                onClick = {
+                                    imagePickerLauncher.launch("image/*")
+                                }
+                            ) {
+                                Text("Galeriden Seç")
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { showPhotoPickerDialog = false }) {
+                                Text("İptal")
+                            }
+                        }
+                    )
+                }
+            }
+        }
+
+        // Telefon Numarası Bilgisi
+        Card(
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text = "Telefon Numarası",
+                    style = MaterialTheme.typography.titleMedium
+                )
+                val savedPhoneNumber = preferencesManager.getPhoneNumber()
+                if (savedPhoneNumber != null && savedPhoneNumber.isNotBlank()) {
+                    Text(
+                        text = savedPhoneNumber,
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = "Bu numara backend'e kayıt için kullanılıyor",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    Text(
+                        text = "Telefon numarası kayıtlı değil",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                    Text(
+                        text = "Uygulamayı kullanmak için telefon numaranızı kaydetmelisiniz (Welcome ekranından)",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+
         // Görüşme İstatistikleri
         if (statistics.totalCalls > 0) {
             Card(
@@ -196,11 +495,11 @@ fun SettingsScreen(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                
+
                 // Kompakt dil seçimi - DropdownMenu kullan
                 var showLanguageDropdown by remember { mutableStateOf(false) }
                 val currentLanguageName = LocaleHelper.getLanguageName(currentLanguage)
-                
+
                 OutlinedButton(
                     onClick = { showLanguageDropdown = true },
                     modifier = Modifier.fillMaxWidth()
@@ -275,7 +574,9 @@ fun SettingsScreen(
                 var backupCodes by remember { mutableStateOf<List<String>>(emptyList()) }
                 var qrCodeUrl by remember { mutableStateOf<String?>(null) }
                 var qrCodeBitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
-                
+                var verificationCode by remember { mutableStateOf("") }
+                var verificationResult by remember { mutableStateOf<Boolean?>(null) }
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -297,7 +598,7 @@ fun SettingsScreen(
                         onCheckedChange = {
                             if (it) {
                                 // 2FA'yı etkinleştir
-                                val (secret, codes) = onEnable2FA()
+                                val (_, codes) = onEnable2FA()
                                 backupCodes = codes
                                 val phoneNumber = preferencesManager.getPhoneNumber() ?: ""
                                 qrCodeUrl = onGenerate2FAQR(phoneNumber)
@@ -307,6 +608,8 @@ fun SettingsScreen(
                                 }
                                 show2FASetup = true
                                 twoFAEnabled = true
+                                verificationResult = null
+                                verificationCode = ""
                             } else {
                                 // 2FA'yı devre dışı bırak
                                 onDisable2FA()
@@ -317,7 +620,7 @@ fun SettingsScreen(
                         }
                     )
                 }
-                
+
                 if (twoFAEnabled) {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         if (show2FASetup && qrCodeUrl != null) {
@@ -329,10 +632,11 @@ fun SettingsScreen(
                             ) {
                                 Column(
                                     modifier = Modifier.padding(12.dp),
-                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally
                                 ) {
                                     Text(
-                                        text = "QR Kodu Tarayın",
+                                        text = "QR Kodu Tarayın ve Doğrulayın",
                                         style = MaterialTheme.typography.bodyMedium,
                                         fontWeight = FontWeight.Bold
                                     )
@@ -342,18 +646,56 @@ fun SettingsScreen(
                                             bitmap = qrCodeBitmap!!.asImageBitmap(),
                                             contentDescription = "2FA QR Kodu",
                                             modifier = Modifier
-                                                .fillMaxWidth()
+                                                .fillMaxWidth(0.8f)
                                                 .aspectRatio(1f),
                                             contentScale = ContentScale.Fit
                                         )
                                         Spacer(modifier = Modifier.height(8.dp))
                                         Text(
-                                            text = "Google Authenticator veya benzeri bir uygulama ile QR kodu tarayın",
+                                            text = "Google Authenticator veya benzeri bir uygulama ile QR kodu tarayın.",
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
-                                    } else if (qrCodeUrl != null) {
-                                        // QR kod henüz oluşturulmadıysa URL göster
+
+                                        // Doğrulama Kodu Alanı
+                                        OutlinedTextField(
+                                            value = verificationCode,
+                                            onValueChange = { code ->
+                                                if (code.length <= 6 && code.all { it.isDigit() }) {
+                                                    verificationCode = code
+                                                }
+                                            },
+                                            label = { Text("6 Haneli Doğrulama Kodu") },
+                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                            modifier = Modifier.fillMaxWidth(0.8f),
+                                            singleLine = true
+                                        )
+
+                                        Button(
+                                            onClick = {
+                                                verificationResult = onVerify2FA(verificationCode)
+                                            },
+                                            enabled = verificationCode.length == 6,
+                                            modifier = Modifier.fillMaxWidth(0.8f)
+                                        ) {
+                                            Text("Doğrula")
+                                        }
+
+                                        verificationResult?.let { result ->
+                                            val (text, color) = if (result) {
+                                                "Doğrulama başarılı!" to Teal
+                                            } else {
+                                                "Doğrulama başarısız. Lütfen tekrar deneyin." to MaterialTheme.colorScheme.error
+                                            }
+                                            Text(
+                                                text = text,
+                                                color = color,
+                                                style = MaterialTheme.typography.bodySmall
+                                            )
+                                        }
+
+                                    } else {
+                                        // QR kod henüz oluşturulmadıysa
                                         Text(
                                             text = "QR kod oluşturuluyor...",
                                             style = MaterialTheme.typography.bodySmall,
@@ -363,7 +705,7 @@ fun SettingsScreen(
                                 }
                             }
                         }
-                        
+
                         if (backupCodes.isNotEmpty()) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -386,7 +728,7 @@ fun SettingsScreen(
                                     )
                                 }
                             }
-                            
+
                             if (showBackupCodes) {
                                 Card(
                                     colors = CardDefaults.cardColors(
@@ -450,7 +792,7 @@ fun SettingsScreen(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                
+
                 // Durum Seçimi
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(
@@ -466,7 +808,7 @@ fun SettingsScreen(
                         expanded = showStatusDropdown,
                         onDismissRequest = { showStatusDropdown = false }
                     ) {
-                        UserStatus.values().forEach { status ->
+                        UserStatus.entries.forEach { status ->
                             DropdownMenuItem(
                                 text = { Text(UserPresence(status).getStatusText()) },
                                 onClick = {
@@ -477,11 +819,11 @@ fun SettingsScreen(
                             )
                         }
                     }
-                    
+
                     // Özel Mesaj
                     OutlinedTextField(
                         value = customMessage,
-                        onValueChange = { 
+                        onValueChange = {
                             customMessage = it
                             preferencesManager.saveCustomStatusMessage(it.takeIf { msg -> msg.isNotBlank() })
                         },
@@ -532,7 +874,7 @@ fun SettingsScreen(
                 }
                 if (preferencesManager.isAutoCleanupEnabled()) {
                     var cleanupDays by remember {
-                        mutableStateOf(preferencesManager.getAutoCleanupDays())
+                        mutableIntStateOf(preferencesManager.getAutoCleanupDays())
                     }
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(
@@ -552,7 +894,7 @@ fun SettingsScreen(
                                     modifier = Modifier.weight(1f),
                                     colors = if (cleanupDays == days) {
                                         ButtonDefaults.outlinedButtonColors(
-                                            contentColor = com.videocall.app.ui.theme.Teal
+                                            contentColor = Teal
                                         )
                                     } else {
                                         ButtonDefaults.outlinedButtonColors()
@@ -584,7 +926,7 @@ fun SettingsScreen(
                 var offlineModeEnabled by remember {
                     mutableStateOf(isOfflineMode)
                 }
-                
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -613,7 +955,7 @@ fun SettingsScreen(
                         }
                     )
                 }
-                
+
                 if (offlineModeEnabled) {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         if (localIpAddress != null) {
@@ -640,14 +982,14 @@ fun SettingsScreen(
                                 }
                             }
                         }
-                        
+
                         OutlinedButton(
                             onClick = { onDiscoverPeers() },
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text("Eş Cihazları Keşfet")
                         }
-                        
+
                         if (discoveredPeers.isNotEmpty()) {
                             Text(
                                 text = "Keşfedilen Cihazlar: ${discoveredPeers.size}",
@@ -682,7 +1024,7 @@ fun SettingsScreen(
                 var voiceCommandsEnabled by remember {
                     mutableStateOf(isVoiceCommandsEnabled)
                 }
-                
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -711,7 +1053,7 @@ fun SettingsScreen(
                         }
                     )
                 }
-                
+
                 if (voiceCommandsEnabled) {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(
@@ -744,6 +1086,117 @@ fun SettingsScreen(
                             style = MaterialTheme.typography.bodySmall
                         )
                     }
+                }
+            }
+        }
+
+        // Görüntü Kalitesi Ayarları
+        Card(
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text = "Görüntü Kalitesi",
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Text(
+                    text = "Video görüşmelerinde kullanılacak çözünürlük ve frame rate",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                
+                val supports4K = remember { CameraCapabilities.supports4K(context) }
+                val supports1080p60fps = remember { CameraCapabilities.supports1080p60fps(context) }
+                
+                var currentQuality by remember {
+                    mutableStateOf(
+                        try {
+                            VideoQuality.valueOf(preferencesManager.getVideoQuality())
+                        } catch (_: Exception) {
+                            VideoQuality.HIGH
+                        }
+                    )
+                }
+                var showQualityDropdown by remember { mutableStateOf(false) }
+                
+                val availableQualities = remember(supports4K, supports1080p60fps) {
+                    buildList {
+                        if (supports1080p60fps) {
+                            add(VideoQuality.FULLHD_60FPS)
+                        }
+                        add(VideoQuality.HIGH)
+                        if (supports4K) {
+                            add(VideoQuality.UHD_4K)
+                        }
+                        add(VideoQuality.MEDIUM)
+                        add(VideoQuality.LOW)
+                    }
+                }
+                
+                // Mevcut kalite listede yoksa varsayılan olarak HIGH seç
+                if (currentQuality !in availableQualities) {
+                    currentQuality = VideoQuality.HIGH
+                }
+                
+                OutlinedButton(
+                    onClick = { showQualityDropdown = true },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = when (currentQuality) {
+                            VideoQuality.FULLHD_60FPS -> "1080p - 60fps (FullHD)"
+                            VideoQuality.HIGH -> "720p - 30fps (HD)"
+                            VideoQuality.UHD_4K -> "2160p - 30fps (4K UHD)"
+                            VideoQuality.MEDIUM -> "480p - 30fps"
+                            VideoQuality.LOW -> "240p - 15fps"
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                
+                DropdownMenu(
+                    expanded = showQualityDropdown,
+                    onDismissRequest = { showQualityDropdown = false }
+                ) {
+                    availableQualities.forEach { quality ->
+                        DropdownMenuItem(
+                            text = { 
+                                Text(
+                                    when (quality) {
+                                        VideoQuality.FULLHD_60FPS -> "1080p - 60fps (FullHD)"
+                                        VideoQuality.HIGH -> "720p - 30fps (HD)"
+                                        VideoQuality.UHD_4K -> "2160p - 30fps (4K UHD)"
+                                        VideoQuality.MEDIUM -> "480p - 30fps"
+                                        VideoQuality.LOW -> "240p - 15fps"
+                                    }
+                                )
+                            },
+                            onClick = {
+                                currentQuality = quality
+                                preferencesManager.saveVideoQuality(quality.name)
+                                showQualityDropdown = false
+                            }
+                        )
+                    }
+                }
+                
+                // Desteklenmeyen kaliteler hakkında bilgi
+                if (!supports1080p60fps && !supports4K) {
+                    Text(
+                        text = "Cihazınız 1080p@60fps veya 4K çözünürlüğü desteklemiyor",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                    )
+                } else if (!supports4K) {
+                    Text(
+                        text = "Cihazınız 4K çözünürlüğü desteklemiyor",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                    )
                 }
             }
         }
@@ -839,33 +1292,6 @@ fun SettingsScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text(
-                    text = "İzinler",
-                    style = MaterialTheme.typography.titleMedium
-                )
-                Text(
-                    text = "• Kamera: Görüntülü görüşme için gerekli",
-                    style = MaterialTheme.typography.bodyMedium
-                )
-                Text(
-                    text = "• Mikrofon: Sesli görüşme için gerekli",
-                    style = MaterialTheme.typography.bodyMedium
-                )
-                Text(
-                    text = "• Rehber: Kişi davet etmek için gerekli",
-                    style = MaterialTheme.typography.bodyMedium
-                )
-            }
-        }
-
-        Card(
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Text(
                     text = "Destek",
                     style = MaterialTheme.typography.titleMedium
                 )
@@ -899,9 +1325,9 @@ fun SettingsScreen(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                
+
                 val shareManager = remember { AppShareManager(context) }
-                
+
                 // Genel Paylaşım
                 Button(
                     onClick = {
@@ -910,7 +1336,7 @@ fun SettingsScreen(
                     },
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = com.videocall.app.ui.theme.Teal
+                        containerColor = Teal
                     )
                 ) {
                     Icon(
@@ -920,7 +1346,7 @@ fun SettingsScreen(
                     )
                     Text("Uygulamayı Paylaş", modifier = Modifier.padding(start = 8.dp))
                 }
-                
+
                 // Hızlı Paylaşım Seçenekleri
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -935,7 +1361,7 @@ fun SettingsScreen(
                             Text("WhatsApp", style = MaterialTheme.typography.bodySmall)
                         }
                     }
-                    
+
                     // Telegram
                     shareManager.shareViaTelegram()?.let { intent ->
                         OutlinedButton(
@@ -946,7 +1372,7 @@ fun SettingsScreen(
                         }
                     }
                 }
-                
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -961,7 +1387,7 @@ fun SettingsScreen(
                     ) {
                         Text("E-posta", style = MaterialTheme.typography.bodySmall)
                     }
-                    
+
                     // SMS
                     OutlinedButton(
                         onClick = {
@@ -972,6 +1398,22 @@ fun SettingsScreen(
                     ) {
                         Text("SMS", style = MaterialTheme.typography.bodySmall)
                     }
+                }
+
+                // Çıkış Yap butonu
+                Spacer(modifier = Modifier.height(24.dp))
+                Button(
+                    onClick = onLogout,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text(
+                        text = "Çıkış Yap",
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.SemiBold
+                    )
                 }
             }
         }
@@ -1000,3 +1442,50 @@ private fun StatisticsRow(
     }
 }
 
+@Composable
+private fun PermissionRow(
+    permissionName: String,
+    description: String,
+    isGranted: Boolean,
+    icon: ImageVector = Icons.Default.Contacts,
+    onClick: () -> Unit = {}
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Row(
+            modifier = Modifier.weight(1f),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = if (isGranted) Teal else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(24.dp)
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = permissionName,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        Icon(
+            imageVector = if (isGranted) Icons.Default.CheckCircle else Icons.Default.Cancel,
+            contentDescription = if (isGranted) "İzin verildi" else "İzin verilmedi",
+            tint = if (isGranted) Teal else MaterialTheme.colorScheme.error,
+            modifier = Modifier.size(24.dp)
+        )
+    }
+}

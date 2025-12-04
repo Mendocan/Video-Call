@@ -1,6 +1,9 @@
 package com.videocall.app.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -18,9 +21,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Phone
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Wifi
-import androidx.compose.material.icons.filled.SignalCellularAlt
 import androidx.compose.material.icons.filled.VideoCall
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -28,30 +28,27 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.videocall.app.model.CallUiState
+import androidx.core.content.ContextCompat
 import com.videocall.app.model.Contact
+import com.videocall.app.model.UserStatus
 import com.videocall.app.ui.theme.Teal
 
 @Composable
 fun HomeScreen(
-    uiState: CallUiState,
+    modifier: Modifier = Modifier,
     addedContacts: List<Contact>,
-    networkState: com.videocall.app.data.NetworkState,
-    onNavigateToCall: () -> Unit,
-    onNavigateToContacts: () -> Unit,
-    onNavigateToLegal: () -> Unit,
     onNavigateToSettings: () -> Unit,
     onStartCallWithContact: (Contact) -> Unit,
     onRemoveContact: (Contact) -> Unit,
-    onToggleFavorite: (Contact) -> Unit = {},
-    modifier: Modifier = Modifier
+    onContactClick: (Contact) -> Unit = {}
 ) {
     val complianceItems = listOf(
         "Tüm medya ve sinyalleşme trafiği TLS 1.3 üzerinden uçtan uca şifrelenir.",
@@ -59,9 +56,13 @@ fun HomeScreen(
         "KVKK ve GDPR kapsamında veri sahibinin silme ve bilgi alma hakları desteklenir.",
         "Görüntülü görüşmeler cihaz üzerinde işlenir; bulutta kalıcı kayıt tutulmaz."
     )
-    val connectionStatus = when {
-        uiState.isConnected -> "Aktif görüşme"
-        else -> "Hazır"
+
+    val context = LocalContext.current
+    val contactsPermissionGranted = remember {
+        ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.READ_CONTACTS
+        ) == PackageManager.PERMISSION_GRANTED
     }
 
     Column(
@@ -70,74 +71,54 @@ fun HomeScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        // Logo - büyütüldü (40dp -> 60dp, 1.5x)
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Image(
                 painter = painterResource(id = R.drawable.logo),
                 contentDescription = "Video Call Logo",
-                modifier = Modifier.size(40.dp)
+                modifier = Modifier.size(60.dp)
             )
-            IconButton(onClick = onNavigateToSettings) {
-                Icon(
-                    imageVector = Icons.Default.Settings,
-                    contentDescription = "Ayarlar",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
         }
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "Durum: ${uiState.statusMessage}",
-                style = MaterialTheme.typography.bodyMedium,
-                color = Teal
-            )
-            // Ağ durumu göstergesi
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically
+
+        // İzin uyarısı (izin yoksa)
+        if (!contactsPermissionGranted) {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                modifier = Modifier.fillMaxWidth()
             ) {
-                Icon(
-                    imageVector = when (networkState.networkType) {
-                        com.videocall.app.data.NetworkType.WIFI -> Icons.Default.Wifi
-                        com.videocall.app.data.NetworkType.MOBILE_DATA -> Icons.Default.SignalCellularAlt
-                        com.videocall.app.data.NetworkType.NONE -> Icons.Default.SignalCellularAlt
-                    },
-                    contentDescription = null,
-                    tint = if (networkState.isConnected) Teal else MaterialTheme.colorScheme.error,
-                    modifier = Modifier.size(20.dp)
-                )
-                Text(
-                    text = when {
-                        networkState.isConnected && networkState.networkType == com.videocall.app.data.NetworkType.WIFI -> "Wi-Fi"
-                        networkState.isConnected && networkState.networkType == com.videocall.app.data.NetworkType.MOBILE_DATA -> "Mobil"
-                        else -> "Bağlantı Yok"
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (networkState.isConnected) Teal else MaterialTheme.colorScheme.error
-                )
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "⚠️ İzin Gerekli",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                    Text(
+                        text = "Kişileri eklemek ve görüntülemek için Rehber izni gereklidir. Lütfen Ayarlar'dan izinleri verin.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                    Button(
+                        onClick = onNavigateToSettings,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error
+                        )
+                    ) {
+                        Text("Ayarlara Git")
+                    }
+                }
             }
         }
 
-        StatusCard(
-            participants = uiState.participants,
-            connectionStatus = connectionStatus,
-            isMicEnabled = uiState.isMicEnabled,
-            isCameraEnabled = uiState.isCameraEnabled,
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        ActionCard(
-            onNavigateToCall = onNavigateToCall,
-            onNavigateToContacts = onNavigateToContacts,
-            onNavigateToLegal = onNavigateToLegal
-        )
+        // ActionCard kaldırıldı - Tab bar üzerinden erişilebilir
 
         if (addedContacts.isNotEmpty()) {
             Card(
@@ -157,7 +138,8 @@ fun HomeScreen(
                             AddedContactItem(
                                 contact = contact,
                                 onCallClick = { onStartCallWithContact(contact) },
-                                onRemoveClick = { onRemoveContact(contact) }
+                                onRemoveClick = { onRemoveContact(contact) },
+                                onClick = { onContactClick(contact) }
                             )
                         }
                     }
@@ -184,91 +166,35 @@ fun HomeScreen(
     }
 }
 
-@Composable
-private fun StatusCard(
-    participants: Int,
-    connectionStatus: String,
-    isMicEnabled: Boolean,
-    isCameraEnabled: Boolean,
-    modifier: Modifier = Modifier
-) {
-    Card(
-        modifier = modifier,
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Text(text = "Oturum Özeti", style = MaterialTheme.typography.titleMedium)
-            SummaryRow("Bağlantı durumu", connectionStatus)
-            SummaryRow("Katılımcı sayısı", participants.toString())
-            SummaryRow("Kamera", if (isCameraEnabled) "Açık" else "Kapalı")
-            SummaryRow("Mikrofon", if (isMicEnabled) "Açık" else "Kapalı")
-        }
-    }
-}
+// StatusCard ve ActionCard kaldırıldı - Tab bar üzerinden erişilebilir
 
 @Composable
-private fun SummaryRow(label: String, value: String) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Text(text = label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(text = value, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
-    }
-}
-
-@Composable
-private fun ActionCard(
-    onNavigateToCall: () -> Unit,
-    onNavigateToContacts: () -> Unit,
-    onNavigateToLegal: () -> Unit
-) {
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Text(
-                text = "Hızlı Aksiyonlar",
-                style = MaterialTheme.typography.titleMedium
-            )
-            Button(
-                onClick = onNavigateToCall,
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(4.dp)
-            ) {
-                Text("Görüntülü Görüşmeye Git")
-            }
-            OutlinedButton(
-                onClick = onNavigateToContacts,
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(4.dp)
-            ) {
-                Text("Kişi Ekle / Rehber")
-            }
-            OutlinedButton(
-                onClick = onNavigateToLegal,
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(4.dp)
-            ) {
-                Text("Yasal Metinler")
-            }
-        }
-    }
-}
-
-@Composable
-private fun AddedContactItem(
+fun AddedContactItem(
+    modifier: Modifier = Modifier,
     contact: Contact,
     onCallClick: () -> Unit,
     onRemoveClick: () -> Unit,
-    modifier: Modifier = Modifier
+    onClick: () -> Unit = {}
 ) {
+    // Uygulamayı kullanan kişilerin çerçevesi turuncu olacak
+    val isAppUser = contact.status == UserStatus.ONLINE
+    val borderColor = if (isAppUser) {
+        androidx.compose.ui.graphics.Color(0xFFFF9800) // Turuncu
+    } else {
+        Teal
+    }
+    
     Card(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .then(
+                if (isAppUser) {
+                    Modifier.border(2.dp, borderColor, RoundedCornerShape(8.dp))
+                } else {
+                    Modifier
+                }
+            ),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
     ) {
         Row(

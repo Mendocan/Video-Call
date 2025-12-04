@@ -75,17 +75,32 @@ fun WelcomeScreen(
 
     fun handleLogin(rememberMe: Boolean) {
         if (validatePhoneNumber(phoneNumber) && termsAccepted) {
-            onLoginSuccess(phoneNumber, rememberMe)
+            // Telefon numarasını normalize et (boşlukları kaldır)
+            val cleaned = phoneNumber.replace(Regex("[^0-9+]"), "")
+            val normalized = when {
+                cleaned.startsWith("+90") -> cleaned
+                cleaned.startsWith("90") && cleaned.length == 12 -> "+$cleaned"
+                cleaned.startsWith("0") && cleaned.length == 11 -> "+90${cleaned.substring(1)}"
+                else -> cleaned
+            }
+            // Backend formatına çevir (0 ile başlayan format)
+            val backendFormat = if (normalized.startsWith("+90")) {
+                "0${normalized.substring(3)}"
+            } else {
+                normalized
+            }
+            // Direkt giriş yap (OTP doğrulama kaldırıldı)
+            onLoginSuccess(backendFormat, rememberMe)
         }
     }
 
     Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
+            modifier = modifier
+                .fillMaxSize()
+                .padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
         // Logo
         Image(
             painter = painterResource(id = R.drawable.logo),

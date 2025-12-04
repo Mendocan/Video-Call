@@ -3,6 +3,7 @@
 package com.videocall.app.data
 
 import android.content.Context
+import com.videocall.app.BuildConfig
 import com.videocall.app.network.SecureHttpClient
 import com.videocall.app.utils.DeviceIdManager
 import kotlinx.coroutines.Dispatchers
@@ -28,7 +29,7 @@ data class DeviceVerificationResult(
 class SubscriptionManager(private val context: Context) {
     private val preferencesManager = PreferencesManager(context)
     private val deviceIdManager = DeviceIdManager(context)
-    private val apiBaseUrl = "http://localhost:3000" // TODO: Production URL'e değiştirilecek
+    private val apiBaseUrl = BuildConfig.BACKEND_API_URL // BuildConfig'den alınıyor (local.properties'ten)
     private val httpClient = SecureHttpClient.getClient() // Güvenli HTTP istemcisi
 
     /**

@@ -100,7 +100,7 @@ import com.videocall.app.model.Participant
 import com.videocall.app.ui.components.VideoSurface
 import com.videocall.app.ui.theme.Danger
 import com.videocall.app.ui.theme.Teal
-import org.webrtc.SurfaceViewRenderer
+import android.view.SurfaceView
 
 @Composable
 fun CallScreen(
@@ -119,8 +119,8 @@ fun CallScreen(
     onSetFilter: (com.videocall.app.model.FilterType) -> Unit = {},
     onCycleFilter: () -> Unit = {},
     onStartCallWithContact: (Contact) -> Unit,
-    onLocalRendererReady: (SurfaceViewRenderer) -> Unit,
-    onRemoteRendererReady: (SurfaceViewRenderer) -> Unit,
+    onLocalRendererReady: (SurfaceView) -> Unit,
+    onRemoteRendererReady: (SurfaceView) -> Unit,
     onNavigateToQRCode: () -> Unit,
     onToggleFavorite: (Contact) -> Unit = {},
     onDeleteCallHistory: (Long) -> Unit = {},
@@ -224,10 +224,6 @@ fun CallScreen(
                         )
                     }
                 }
-            }
-
-            if (uiState.statusMessage.isNotBlank()) {
-                StatusBanner(uiState.statusMessage)
             }
 
             // Ağ durumu uyarısı
@@ -1439,8 +1435,8 @@ private fun Placeholder(text: String, modifier: Modifier = Modifier) {
 fun GroupCallGrid(
     participants: List<Participant>,
     isAudioOnly: Boolean,
-    onLocalRendererReady: (SurfaceViewRenderer) -> Unit,
-    onRemoteRendererReady: (Participant, SurfaceViewRenderer) -> Unit,
+    onLocalRendererReady: (SurfaceView) -> Unit,
+    onRemoteRendererReady: (Participant, SurfaceView) -> Unit,
     modifier: Modifier = Modifier
 ) {
     // Grid boyutunu katılımcı sayısına göre belirle
@@ -1481,8 +1477,8 @@ fun GroupCallGrid(
 fun ParticipantVideoItem(
     participant: Participant,
     isAudioOnly: Boolean,
-    onLocalRendererReady: ((SurfaceViewRenderer) -> Unit)?,
-    onRemoteRendererReady: ((SurfaceViewRenderer) -> Unit)?,
+    onLocalRendererReady: ((SurfaceView) -> Unit)?,
+    onRemoteRendererReady: ((SurfaceView) -> Unit)?,
     modifier: Modifier = Modifier
 ) {
     Box(

@@ -74,9 +74,135 @@ sealed interface SignalingMessage {
         val message: String, 
         val senderPhoneNumber: String, 
         val senderName: String?,
-        val targetPhoneNumber: String? = null // Kişiye özel chat için
+        val targetPhoneNumber: String? = null, // Kişiye özel chat için
+        val messageId: String? = null, // Mesaj ID (düzenleme için)
+        val timestamp: Long = System.currentTimeMillis() // Mesaj zamanı
     ) : SignalingMessage {
         override val type: String = "chat"
+    }
+    
+    // Mesaj düzenleme mesajı
+    data class ChatEdit(
+        val messageId: String,
+        val newMessage: String,
+        val senderPhoneNumber: String,
+        val targetPhoneNumber: String
+    ) : SignalingMessage {
+        override val type: String = "chat-edit"
+    }
+    
+    // Mesaj durumu güncelleme mesajı
+    data class MessageStatusUpdate(
+        val messageId: String,
+        val status: String, // "sent", "delivered", "read"
+        val targetPhoneNumber: String
+    ) : SignalingMessage {
+        override val type: String = "message-status"
+    }
+    
+    // Mesaj silme mesajı
+    data class ChatDelete(
+        val messageId: String,
+        val senderPhoneNumber: String,
+        val targetPhoneNumber: String
+    ) : SignalingMessage {
+        override val type: String = "chat-delete"
+    }
+    
+    // Canlı yayın mesajları
+    data class StartLive(
+        val title: String? = null,
+        val targetPhoneNumbers: List<String>? = null, // Kişiler için
+        val groupIds: List<String>? = null, // Gruplar için
+        val broadcasterPhoneNumber: String,
+        val broadcasterName: String?
+    ) : SignalingMessage {
+        override val type: String = "start-live"
+    }
+    
+    data class LiveStarted(
+        val liveId: String,
+        val roomCode: String,
+        val broadcasterPhoneNumber: String,
+        val broadcasterName: String?,
+        val title: String?,
+        val timestamp: String
+    ) : SignalingMessage {
+        override val type: String = "live-started"
+    }
+    
+    data class JoinLive(
+        val liveId: String,
+        val viewerPhoneNumber: String,
+        val viewerName: String?
+    ) : SignalingMessage {
+        override val type: String = "join-live"
+    }
+    
+    data class LiveJoined(
+        val liveId: String,
+        val roomCode: String,
+        val broadcasterPhoneNumber: String,
+        val broadcasterName: String?,
+        val title: String?,
+        val viewerCount: Int,
+        val timestamp: String
+    ) : SignalingMessage {
+        override val type: String = "live-joined"
+    }
+    
+    data class EndLive(
+        val liveId: String,
+        val broadcasterPhoneNumber: String
+    ) : SignalingMessage {
+        override val type: String = "end-live"
+    }
+    
+    data class LiveEnded(
+        val liveId: String,
+        val broadcasterPhoneNumber: String,
+        val timestamp: String
+    ) : SignalingMessage {
+        override val type: String = "live-ended"
+    }
+    
+    data class LiveViewerJoined(
+        val liveId: String,
+        val viewerPhoneNumber: String,
+        val viewerName: String?,
+        val viewerCount: Int,
+        val timestamp: String
+    ) : SignalingMessage {
+        override val type: String = "live-viewer-joined"
+    }
+    
+    data class LiveViewerLeft(
+        val liveId: String,
+        val viewerPhoneNumber: String,
+        val viewerCount: Int,
+        val timestamp: String
+    ) : SignalingMessage {
+        override val type: String = "live-viewer-left"
+    }
+    
+    // Kayıt durumu bildirimi
+    data class RecordingStatus(
+        val isRecording: Boolean,
+        val senderPhoneNumber: String,
+        val roomCode: String? = null // Görüşme için room code, chat için null
+    ) : SignalingMessage {
+        override val type: String = "recording-status"
+    }
+    
+    data class IncomingLive(
+        val liveId: String,
+        val roomCode: String,
+        val broadcasterPhoneNumber: String,
+        val broadcasterName: String?,
+        val title: String?,
+        val timestamp: String
+    ) : SignalingMessage {
+        override val type: String = "incoming-live"
     }
     
     data class FileShare(
@@ -112,6 +238,10 @@ sealed interface SignalingMessage {
         override val type: String = "logged-out"
     }
 
+    data class Logout(val phoneNumber: String = "") : SignalingMessage {
+        override val type: String = "logout"
+    }
+
     // OTP mesajları
     data class RequestOTP(val phoneNumber: String) : SignalingMessage {
         override val type: String = "request-otp"
@@ -125,18 +255,7 @@ sealed interface SignalingMessage {
         override val type: String = "otp-error"
     }
 
-    // FCM Token mesajları
-    data class RegisterFCMToken(val fcmToken: String) : SignalingMessage {
-        override val type: String = "register-fcm-token"
-    }
-
-    data class FCMTokenRegistered(val phoneNumber: String, val timestamp: String) : SignalingMessage {
-        override val type: String = "fcm-token-registered"
-    }
-
-    data class FCMTokenError(val message: String) : SignalingMessage {
-        override val type: String = "fcm-token-error"
-    }
+    // Firebase kaldırıldı - WebSocket kullanıyoruz (bağımsız yapı)
 
     // Arama mesajları
     data class CallRequest(
@@ -217,6 +336,12 @@ sealed interface SignalingMessage {
     data class CallError(val reason: String, val targetPhoneNumber: String? = null) : SignalingMessage {
         override val type: String = "call-error"
     }
+
+    data class Ringing(
+        val targetPhoneNumber: String,
+        val timestamp: String,
+        override val type: String = "ringing"
+    ) : SignalingMessage
 
     // Grup yönetim mesajları
     data class CreateGroup(val groupName: String, val memberPhoneNumbers: List<String>) : SignalingMessage {
@@ -424,7 +549,124 @@ sealed interface SignalingMessage {
                         message = payload.getString("message"),
                         senderPhoneNumber = payload.getString("senderPhoneNumber"),
                         senderName = payload.optString("senderName").takeIf { it.isNotEmpty() },
-                        targetPhoneNumber = payload.optString("targetPhoneNumber").takeIf { it.isNotEmpty() }
+                        targetPhoneNumber = payload.optString("targetPhoneNumber").takeIf { it.isNotEmpty() },
+                        messageId = payload.optString("messageId").takeIf { it.isNotEmpty() }
+                    )
+                }
+                "chat-edit" -> {
+                    val payload = json.optJSONObject("payload") ?: json
+                    ChatEdit(
+                        messageId = payload.getString("messageId"),
+                        newMessage = payload.getString("newMessage"),
+                        senderPhoneNumber = payload.getString("senderPhoneNumber"),
+                        targetPhoneNumber = payload.getString("targetPhoneNumber")
+                    )
+                }
+                "message-status" -> {
+                    val payload = json.optJSONObject("payload") ?: json
+                    MessageStatusUpdate(
+                        messageId = payload.getString("messageId"),
+                        status = payload.getString("status"),
+                        targetPhoneNumber = payload.getString("targetPhoneNumber")
+                    )
+                }
+                "chat-delete" -> {
+                    val payload = json.optJSONObject("payload") ?: json
+                    ChatDelete(
+                        messageId = payload.getString("messageId"),
+                        senderPhoneNumber = payload.getString("senderPhoneNumber"),
+                        targetPhoneNumber = payload.getString("targetPhoneNumber")
+                    )
+                }
+                "start-live" -> {
+                    val payload = json.optJSONObject("payload") ?: json
+                    StartLive(
+                        title = payload.optString("title").takeIf { it.isNotEmpty() },
+                        targetPhoneNumbers = payload.optJSONArray("targetPhoneNumbers")?.let { arr ->
+                            (0 until arr.length()).map { arr.getString(it) }
+                        },
+                        groupIds = payload.optJSONArray("groupIds")?.let { arr ->
+                            (0 until arr.length()).map { arr.getString(it) }
+                        },
+                        broadcasterPhoneNumber = payload.getString("broadcasterPhoneNumber"),
+                        broadcasterName = payload.optString("broadcasterName").takeIf { it.isNotEmpty() }
+                    )
+                }
+                "live-started" -> {
+                    LiveStarted(
+                        liveId = json.getString("liveId"),
+                        roomCode = json.getString("roomCode"),
+                        broadcasterPhoneNumber = json.getString("broadcasterPhoneNumber"),
+                        broadcasterName = json.optString("broadcasterName").takeIf { it.isNotEmpty() },
+                        title = json.optString("title").takeIf { it.isNotEmpty() },
+                        timestamp = json.getString("timestamp")
+                    )
+                }
+                "join-live" -> {
+                    val payload = json.optJSONObject("payload") ?: json
+                    JoinLive(
+                        liveId = payload.getString("liveId"),
+                        viewerPhoneNumber = payload.getString("viewerPhoneNumber"),
+                        viewerName = payload.optString("viewerName").takeIf { it.isNotEmpty() }
+                    )
+                }
+                "live-joined" -> {
+                    LiveJoined(
+                        liveId = json.getString("liveId"),
+                        roomCode = json.getString("roomCode"),
+                        broadcasterPhoneNumber = json.getString("broadcasterPhoneNumber"),
+                        broadcasterName = json.optString("broadcasterName").takeIf { it.isNotEmpty() },
+                        title = json.optString("title").takeIf { it.isNotEmpty() },
+                        viewerCount = json.getInt("viewerCount"),
+                        timestamp = json.getString("timestamp")
+                    )
+                }
+                "end-live" -> {
+                    val payload = json.optJSONObject("payload") ?: json
+                    EndLive(
+                        liveId = payload.getString("liveId"),
+                        broadcasterPhoneNumber = payload.getString("broadcasterPhoneNumber")
+                    )
+                }
+                "live-ended" -> {
+                    LiveEnded(
+                        liveId = json.getString("liveId"),
+                        broadcasterPhoneNumber = json.getString("broadcasterPhoneNumber"),
+                        timestamp = json.getString("timestamp")
+                    )
+                }
+                "incoming-live" -> {
+                    IncomingLive(
+                        liveId = json.getString("liveId"),
+                        roomCode = json.getString("roomCode"),
+                        broadcasterPhoneNumber = json.getString("broadcasterPhoneNumber"),
+                        broadcasterName = json.optString("broadcasterName").takeIf { it.isNotEmpty() },
+                        title = json.optString("title").takeIf { it.isNotEmpty() },
+                        timestamp = json.getString("timestamp")
+                    )
+                }
+                "live-viewer-joined" -> {
+                    LiveViewerJoined(
+                        liveId = json.getString("liveId"),
+                        viewerPhoneNumber = json.getString("viewerPhoneNumber"),
+                        viewerName = json.optString("viewerName").takeIf { it.isNotEmpty() },
+                        viewerCount = json.getInt("viewerCount"),
+                        timestamp = json.getString("timestamp")
+                    )
+                }
+                "live-viewer-left" -> {
+                    LiveViewerLeft(
+                        liveId = json.getString("liveId"),
+                        viewerPhoneNumber = json.getString("viewerPhoneNumber"),
+                        viewerCount = json.getInt("viewerCount"),
+                        timestamp = json.getString("timestamp")
+                    )
+                }
+                "recording-status" -> {
+                    RecordingStatus(
+                        isRecording = json.getBoolean("isRecording"),
+                        senderPhoneNumber = json.getString("senderPhoneNumber"),
+                        roomCode = json.optString("roomCode").takeIf { it.isNotEmpty() }
                     )
                 }
                 "file" -> {
@@ -475,18 +717,7 @@ sealed interface SignalingMessage {
                 "otp-error" -> {
                     OTPError(message = json.getString("message"))
                 }
-                "register-fcm-token" -> {
-                    RegisterFCMToken(fcmToken = json.getString("fcmToken"))
-                }
-                "fcm-token-registered" -> {
-                    FCMTokenRegistered(
-                        phoneNumber = json.getString("phoneNumber"),
-                        timestamp = json.getString("timestamp")
-                    )
-                }
-                "fcm-token-error" -> {
-                    FCMTokenError(message = json.getString("message"))
-                }
+                // Firebase kaldırıldı - WebSocket kullanıyoruz (bağımsız yapı)
                 "call-request-sent" -> {
                     CallRequestSent(
                         groupId = json.getString("groupId"),
@@ -519,6 +750,12 @@ sealed interface SignalingMessage {
                 "call-rejected" -> {
                     CallRejected(
                         groupId = json.getString("groupId"),
+                        timestamp = json.getString("timestamp")
+                    )
+                }
+                "ringing" -> {
+                    Ringing(
+                        targetPhoneNumber = json.getString("targetPhoneNumber"),
                         timestamp = json.getString("timestamp")
                     )
                 }
@@ -735,6 +972,96 @@ sealed interface SignalingMessage {
                     json.put("senderPhoneNumber", message.senderPhoneNumber)
                     message.senderName?.let { json.put("senderName", it) }
                     message.targetPhoneNumber?.let { json.put("targetPhoneNumber", it) }
+                    message.messageId?.let { json.put("messageId", it) }
+                    json.put("timestamp", message.timestamp)
+                }
+                is ChatEdit -> {
+                    json.put("messageId", message.messageId)
+                    json.put("newMessage", message.newMessage)
+                    json.put("senderPhoneNumber", message.senderPhoneNumber)
+                    json.put("targetPhoneNumber", message.targetPhoneNumber)
+                }
+                is MessageStatusUpdate -> {
+                    json.put("messageId", message.messageId)
+                    json.put("status", message.status)
+                    json.put("targetPhoneNumber", message.targetPhoneNumber)
+                }
+                is ChatDelete -> {
+                    json.put("messageId", message.messageId)
+                    json.put("senderPhoneNumber", message.senderPhoneNumber)
+                    json.put("targetPhoneNumber", message.targetPhoneNumber)
+                }
+                is StartLive -> {
+                    message.title?.let { json.put("title", it) }
+                    message.targetPhoneNumbers?.let { numbers ->
+                        val arr = org.json.JSONArray()
+                        numbers.forEach { arr.put(it) }
+                        json.put("targetPhoneNumbers", arr)
+                    }
+                    message.groupIds?.let { ids ->
+                        val arr = org.json.JSONArray()
+                        ids.forEach { arr.put(it) }
+                        json.put("groupIds", arr)
+                    }
+                    json.put("broadcasterPhoneNumber", message.broadcasterPhoneNumber)
+                    message.broadcasterName?.let { json.put("broadcasterName", it) }
+                }
+                is LiveStarted -> {
+                    json.put("liveId", message.liveId)
+                    json.put("roomCode", message.roomCode)
+                    json.put("broadcasterPhoneNumber", message.broadcasterPhoneNumber)
+                    message.broadcasterName?.let { json.put("broadcasterName", it) }
+                    message.title?.let { json.put("title", it) }
+                    json.put("timestamp", message.timestamp)
+                }
+                is JoinLive -> {
+                    json.put("liveId", message.liveId)
+                    json.put("viewerPhoneNumber", message.viewerPhoneNumber)
+                    message.viewerName?.let { json.put("viewerName", it) }
+                }
+                is LiveJoined -> {
+                    json.put("liveId", message.liveId)
+                    json.put("roomCode", message.roomCode)
+                    json.put("broadcasterPhoneNumber", message.broadcasterPhoneNumber)
+                    message.broadcasterName?.let { json.put("broadcasterName", it) }
+                    message.title?.let { json.put("title", it) }
+                    json.put("viewerCount", message.viewerCount)
+                    json.put("timestamp", message.timestamp)
+                }
+                is EndLive -> {
+                    json.put("liveId", message.liveId)
+                    json.put("broadcasterPhoneNumber", message.broadcasterPhoneNumber)
+                }
+                is LiveEnded -> {
+                    json.put("liveId", message.liveId)
+                    json.put("broadcasterPhoneNumber", message.broadcasterPhoneNumber)
+                    json.put("timestamp", message.timestamp)
+                }
+                is IncomingLive -> {
+                    json.put("liveId", message.liveId)
+                    json.put("roomCode", message.roomCode)
+                    json.put("broadcasterPhoneNumber", message.broadcasterPhoneNumber)
+                    message.broadcasterName?.let { json.put("broadcasterName", it) }
+                    message.title?.let { json.put("title", it) }
+                    json.put("timestamp", message.timestamp)
+                }
+                is LiveViewerJoined -> {
+                    json.put("liveId", message.liveId)
+                    json.put("viewerPhoneNumber", message.viewerPhoneNumber)
+                    message.viewerName?.let { json.put("viewerName", it) }
+                    json.put("viewerCount", message.viewerCount)
+                    json.put("timestamp", message.timestamp)
+                }
+                is LiveViewerLeft -> {
+                    json.put("liveId", message.liveId)
+                    json.put("viewerPhoneNumber", message.viewerPhoneNumber)
+                    json.put("viewerCount", message.viewerCount)
+                    json.put("timestamp", message.timestamp)
+                }
+                is RecordingStatus -> {
+                    json.put("isRecording", message.isRecording)
+                    json.put("senderPhoneNumber", message.senderPhoneNumber)
+                    message.roomCode?.let { json.put("roomCode", it) }
                 }
                 is FileShare -> {
                     json.put("fileId", message.fileId)
@@ -757,9 +1084,7 @@ sealed interface SignalingMessage {
                 is RequestOTP -> {
                     json.put("phoneNumber", message.phoneNumber)
                 }
-                is RegisterFCMToken -> {
-                    json.put("fcmToken", message.fcmToken)
-                }
+                // Firebase kaldırıldı - WebSocket kullanıyoruz (bağımsız yapı)
                 is CallRequest -> {
                     message.targetPhoneNumber?.let { json.put("targetPhoneNumber", it) }
                     message.groupId?.let { json.put("groupId", it) }
@@ -805,6 +1130,12 @@ sealed interface SignalingMessage {
                 is GetBlockedUsers -> {
                     // Boş mesaj, sadece type yeterli
                 }
+                is Logout -> {
+                    // Logout mesajı - phoneNumber opsiyonel
+                    if (message.phoneNumber.isNotEmpty()) {
+                        json.put("phoneNumber", message.phoneNumber)
+                    }
+                }
                 // Backend'den gelen mesajlar (toJson'da kullanılmaz, sadece fromJson'da)
                 is Registered,
                 is LoggedIn,
@@ -815,6 +1146,7 @@ sealed interface SignalingMessage {
                 is CallRejected,
                 is CallAcceptedBy,
                 is CallRejectedBy,
+                is Ringing,
                 is CallError,
                 is GroupCreated,
                 is GroupJoined,
@@ -827,8 +1159,6 @@ sealed interface SignalingMessage {
                 is UserBlocked,
                 is UserUnblocked,
                 is BlockedUsersList,
-                is FCMTokenError,
-                is FCMTokenRegistered,
                 is OTPError,
                 is OTPSent,
                 is UserLookupResponse -> {

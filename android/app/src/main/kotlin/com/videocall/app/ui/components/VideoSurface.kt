@@ -13,16 +13,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
-import org.webrtc.SurfaceViewRenderer
+import android.view.SurfaceView
 
 @Composable
 fun VideoSurface(
     modifier: Modifier = Modifier,
     isOverlay: Boolean = false,
-    onRendererReady: (SurfaceViewRenderer) -> Unit
+    onRendererReady: (SurfaceView) -> Unit
 ) {
     val context = LocalContext.current
-    var renderer: SurfaceViewRenderer? by remember { mutableStateOf(null) }
+    var renderer: SurfaceView? by remember { mutableStateOf(null) }
 
     Box(
         modifier = modifier.background(Color.Black.copy(alpha = 0.5f))
@@ -30,10 +30,8 @@ fun VideoSurface(
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = {
-                SurfaceViewRenderer(context).apply {
-                    setEnableHardwareScaler(true)
+                SurfaceView(context).apply {
                     setZOrderMediaOverlay(isOverlay)
-                    setZOrderOnTop(isOverlay)
                     onRendererReady(this)
                     renderer = this
                 }
@@ -43,9 +41,8 @@ fun VideoSurface(
 
     DisposableEffect(Unit) {
         onDispose {
-            renderer?.release()
+            // SurfaceView için özel temizlik gerekmez
             renderer = null
         }
     }
 }
-

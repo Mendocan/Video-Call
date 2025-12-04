@@ -15,7 +15,7 @@ import android.renderscript.Element
 import android.renderscript.RenderScript
 import android.renderscript.ScriptIntrinsicBlur
 import android.util.Log
-import org.webrtc.*
+// import org.webrtc.* // DirectCall'da şimdilik kullanılmıyor
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CoroutineScope
@@ -30,16 +30,16 @@ import com.videocall.app.model.FilterType
  */
 class VideoProcessor(
     private val context: android.content.Context,
-    private val eglBase: EglBase,
+    private val eglBase: Any, // EglBase yerine Any (DirectCall'da şimdilik kullanılmıyor)
     private val scope: CoroutineScope,
     private val backgroundMode: AtomicReference<BackgroundMode>,
     private val filterType: AtomicReference<FilterType>
 ) {
     private var renderScript: RenderScript? = null
     private var blurScript: ScriptIntrinsicBlur? = null
-    private var processedVideoTrack: VideoTrack? = null
-    private var processedVideoSource: VideoSource? = null
-    private val processedSinks = mutableListOf<VideoSink>()
+    // private var processedVideoTrack: VideoTrack? = null // DirectCall'da şimdilik kullanılmıyor
+    // private var processedVideoSource: VideoSource? = null // DirectCall'da şimdilik kullanılmıyor
+    // private val processedSinks = mutableListOf<VideoSink>() // DirectCall'da şimdilik kullanılmıyor
     
     companion object {
         private const val TAG = "VideoProcessor"
@@ -61,12 +61,16 @@ class VideoProcessor(
     }
     
     /**
-     * İşlenmiş video track'i döndürür
+     * İşlenmiş video track'i döndürür (DirectCall'da şimdilik kullanılmıyor)
      */
     fun getProcessedVideoTrack(
-        peerConnectionFactory: PeerConnectionFactory,
-        originalTrack: VideoTrack
-    ): VideoTrack {
+        peerConnectionFactory: Any, // PeerConnectionFactory yerine Any
+        originalTrack: Any // VideoTrack yerine Any
+    ): Any { // VideoTrack yerine Any
+        // DirectCall'da şimdilik kullanılmıyor
+        android.util.Log.w("VideoProcessor", "getProcessedVideoTrack DirectCall'da henüz desteklenmiyor")
+        return originalTrack
+        /*
         if (processedVideoTrack == null) {
             processedVideoSource = peerConnectionFactory.createVideoSource(false)
             processedVideoTrack = peerConnectionFactory.createVideoTrack(
@@ -79,12 +83,16 @@ class VideoProcessor(
         }
         
         return processedVideoTrack!!
+        */
     }
     
     /**
-     * Video işleme sink'i oluşturur
+     * Video işleme sink'i oluşturur (DirectCall'da şimdilik kullanılmıyor)
      */
-    private fun createProcessingSink(): VideoSink {
+    private fun createProcessingSink(): Any { // VideoSink yerine Any
+        // DirectCall'da şimdilik kullanılmıyor
+        return object {}
+        /*
         return object : VideoSink {
             override fun onFrame(frame: VideoFrame) {
                 scope.launch(Dispatchers.Default) {
@@ -106,12 +114,16 @@ class VideoProcessor(
                 }
             }
         }
+        */
     }
     
     /**
-     * Video frame'ini işler (arka plan değiştirme ve filtreler)
+     * Video frame'ini işler (arka plan değiştirme ve filtreler) (DirectCall'da şimdilik kullanılmıyor)
      */
-    private fun processFrame(frame: VideoFrame): VideoFrame? {
+    private fun processFrame(frame: Any): Any? { // VideoFrame yerine Any
+        // DirectCall'da şimdilik kullanılmıyor
+        return frame
+        /*
         val bgMode = backgroundMode.get()
         val filter = filterType.get()
         
@@ -145,14 +157,19 @@ class VideoProcessor(
             Log.e(TAG, "Frame işleme hatası", e)
             return frame
         }
+        */
     }
     
     /**
-     * VideoFrame'i Bitmap'e dönüştürür
+     * VideoFrame'i Bitmap'e dönüştürür (DirectCall'da şimdilik kullanılmıyor)
      */
-    private fun frameToBitmap(frame: VideoFrame): Bitmap? {
+    private fun frameToBitmap(frame: Any): Bitmap? { // VideoFrame yerine Any
+        // DirectCall'da şimdilik kullanılmıyor
+        return null
+        /*
         return try {
-            val i420Buffer = frame.buffer.toI420() ?: return null
+            // val i420Buffer = (frame as VideoFrame).buffer.toI420() ?: return null
+            return null // WebRTC bağımlılığı kaldırıldı
             val width = i420Buffer.width
             val height = i420Buffer.height
             val yBuffer = i420Buffer.dataY
@@ -196,12 +213,16 @@ class VideoProcessor(
             Log.e(TAG, "Frame to Bitmap dönüşüm hatası", e)
             null
         }
+        */
     }
     
     /**
-     * Bitmap'i VideoFrame'e dönüştürür
+     * Bitmap'i VideoFrame'e dönüştürür (DirectCall'da şimdilik kullanılmıyor)
      */
-    private fun bitmapToFrame(bitmap: Bitmap, originalFrame: VideoFrame): VideoFrame? {
+    private fun bitmapToFrame(bitmap: Bitmap, originalFrame: Any): Any? { // VideoFrame yerine Any
+        // DirectCall'da şimdilik kullanılmıyor
+        return null
+        /*
         return try {
             val width = bitmap.width
             val height = bitmap.height
@@ -235,22 +256,15 @@ class VideoProcessor(
                 }
             }
             
-            val yBuffer = JavaI420Buffer.wrap(
-                width, height,
-                ByteBuffer.wrap(yPlane),
-                width,
-                ByteBuffer.wrap(uPlane),
-                width / 2,
-                ByteBuffer.wrap(vPlane),
-                width / 2,
-                null
-            )
-            
-            VideoFrame(yBuffer, originalFrame.rotation, originalFrame.timestampNs)
+            // WebRTC bağımlılığı kaldırıldı
+            // val yBuffer = JavaI420Buffer.wrap(...)
+            // VideoFrame(yBuffer, originalFrame.rotation, originalFrame.timestampNs)
+            null
         } catch (e: Exception) {
             Log.e(TAG, "Bitmap to Frame dönüşüm hatası", e)
             null
         }
+        */
     }
     
     /**
@@ -372,17 +386,17 @@ class VideoProcessor(
     }
     
     /**
-     * İşlenmiş video track'e sink ekler
+     * İşlenmiş video track'e sink ekler (DirectCall'da şimdilik kullanılmıyor)
      */
-    fun addSink(sink: VideoSink) {
-        processedSinks.add(sink)
+    fun addSink(sink: Any) { // VideoSink yerine Any
+        // processedSinks.add(sink) // DirectCall'da şimdilik kullanılmıyor
     }
     
     /**
-     * İşlenmiş video track'ten sink kaldırır
+     * İşlenmiş video track'ten sink kaldırır (DirectCall'da şimdilik kullanılmıyor)
      */
-    fun removeSink(sink: VideoSink) {
-        processedSinks.remove(sink)
+    fun removeSink(sink: Any) { // VideoSink yerine Any
+        // processedSinks.remove(sink) // DirectCall'da şimdilik kullanılmıyor
     }
     
     /**
@@ -394,8 +408,8 @@ class VideoProcessor(
             blurScript?.destroy()
             @Suppress("DEPRECATION")
             renderScript?.destroy()
-            processedVideoSource?.dispose()
-            processedSinks.clear()
+            // processedVideoSource?.dispose() // DirectCall'da şimdilik kullanılmıyor
+            // processedSinks.clear() // DirectCall'da şimdilik kullanılmıyor
         } catch (e: Exception) {
             Log.e(TAG, "Dispose hatası", e)
         }

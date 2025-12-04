@@ -35,6 +35,9 @@ class PreferencesManager(context: Context) {
         private const val KEY_2FA_BACKUP_CODES = "2fa_backup_codes"
         private const val KEY_LANGUAGE = "language"
         private const val KEY_BLOCKED_USERS = "blocked_users"
+        private const val KEY_CHAT_BACKGROUND_COLOR = "chat_background_color"
+        private const val KEY_VIDEO_QUALITY = "video_quality"
+        private const val KEY_PROFILE_PHOTO_URI = "profile_photo_uri"
     }
 
     fun isFirstLaunch(): Boolean {
@@ -344,6 +347,37 @@ class PreferencesManager(context: Context) {
         } catch (e: Exception) {
             return null
         }
+    }
+    
+    // Chat Background Color Management
+    fun saveChatBackgroundColor(colorHex: String) {
+        prefs.edit().putString(KEY_CHAT_BACKGROUND_COLOR, colorHex).apply()
+    }
+    
+    fun getChatBackgroundColor(): String? {
+        return prefs.getString(KEY_CHAT_BACKGROUND_COLOR, null)
+    }
+    
+    // Video Quality Management
+    fun saveVideoQuality(quality: String) {
+        prefs.edit().putString(KEY_VIDEO_QUALITY, quality).apply()
+    }
+    
+    fun getVideoQuality(): String {
+        return prefs.getString(KEY_VIDEO_QUALITY, "HIGH") ?: "HIGH"
+    }
+    
+    // Profile Photo Management
+    fun saveProfilePhotoUri(photoUri: String) {
+        prefs.edit().putString(KEY_PROFILE_PHOTO_URI, photoUri).apply()
+    }
+    
+    fun getProfilePhotoUri(): String? {
+        return prefs.getString(KEY_PROFILE_PHOTO_URI, null)
+    }
+    
+    fun removeProfilePhoto() {
+        prefs.edit().remove(KEY_PROFILE_PHOTO_URI).apply()
     }
 }
 
