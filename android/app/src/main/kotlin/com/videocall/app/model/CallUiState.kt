@@ -60,14 +60,12 @@ data class VideoQualitySettings(
     val maxBitrate: Int   // bps
 ) {
     companion object {
-        fun getSettings(quality: VideoQuality): VideoQualitySettings {
-            return when (quality) {
-                VideoQuality.FULLHD_60FPS -> VideoQualitySettings(1920, 1080, 60, 3_000_000, 4_000_000)
-                VideoQuality.HIGH -> VideoQualitySettings(1280, 720, 30, 1_000_000, 2_000_000)
-                VideoQuality.UHD_4K -> VideoQualitySettings(3840, 2160, 30, 6_000_000, 8_000_000)
-                VideoQuality.MEDIUM -> VideoQualitySettings(640, 480, 30, 500_000, 1_000_000)
-                VideoQuality.LOW -> VideoQualitySettings(320, 240, 15, 250_000, 500_000)
-            }
+        fun getSettings(quality: VideoQuality): VideoQualitySettings = when (quality) {
+            VideoQuality.FULLHD_60FPS -> VideoQualitySettings(1920, 1080, 60, 3_000_000, 4_000_000)
+            VideoQuality.HIGH -> VideoQualitySettings(1280, 720, 30, 1_000_000, 2_000_000)
+            VideoQuality.UHD_4K -> VideoQualitySettings(3840, 2160, 30, 6_000_000, 8_000_000)
+            VideoQuality.MEDIUM -> VideoQualitySettings(640, 480, 30, 500_000, 1_000_000)
+            VideoQuality.LOW -> VideoQualitySettings(320, 240, 15, 250_000, 500_000)
         }
     }
 }

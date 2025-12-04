@@ -124,17 +124,25 @@ class DirectCallVideoRenderer {
             val uSize = ySize / 4
             val vSize = uSize
             
-            // YUV420 format: Y plane, U plane, V plane
+            // YUV420 format: Y plane, U plane (width/2 × height/2), V plane (width/2 × height/2)
             var yIndex = 0
-            var uIndex = ySize
-            var vIndex = ySize + uSize
+            var uvRowIndex = 0 // UV satır başlangıç index'i
+            var pixelIndex = 0
             
             for (j in 0 until height) {
+                // Her satır için UV row index'i hesapla (her 2 satırda bir)
+                val uvRowStart = ySize + (j / 2) * (width / 2)
+                var uIndex = uvRowStart
+                var vIndex = uvRowStart + uSize
+                
                 for (i in 0 until width) {
                     // YUV değerlerini al
                     val y = (yuv[yIndex].toInt() and 0xFF) - 16
-                    val u = (yuv[uIndex].toInt() and 0xFF) - 128
-                    val v = (yuv[vIndex].toInt() and 0xFF) - 128
+                    
+                    // UV index'i hesapla (her 2x2 blok için bir UV değeri)
+                    val uvOffset = i / 2
+                    val u = (yuv[uIndex + uvOffset].toInt() and 0xFF) - 128
+                    val v = (yuv[vIndex + uvOffset].toInt() and 0xFF) - 128
                     
                     // RGB'ye çevir (ITU-R BT.601)
                     var r = (y + 1.402 * v).toInt()
@@ -146,21 +154,10 @@ class DirectCallVideoRenderer {
                     g = g.coerceIn(0, 255)
                     b = b.coerceIn(0, 255)
                     
-                    pixels[yIndex] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+                    pixels[pixelIndex] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
                     
                     yIndex++
-                    
-                    // UV index'i güncelle (her 2x2 blok için bir UV değeri)
-                    if (i % 2 == 1 && j % 2 == 0) {
-                        uIndex++
-                        vIndex++
-                    }
-                }
-                
-                // Satır sonunda UV index'i düzelt
-                if (j % 2 == 1) {
-                    uIndex -= width / 2
-                    vIndex -= width / 2
+                    pixelIndex++
                 }
             }
             

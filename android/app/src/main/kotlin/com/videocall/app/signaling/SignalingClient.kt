@@ -6,6 +6,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -37,6 +38,7 @@ class SignalingClient(
     private var pendingOpen: CompletableDeferred<Unit>? = null
     private var activeRoom: String? = null
     private var isRegistered: Boolean = false
+    private var pendingRegistration: CompletableDeferred<Unit>? = null // Registration synchronization
     
     // Reconnect mekanizması
     private var shouldReconnect: Boolean = false
@@ -95,11 +97,28 @@ class SignalingClient(
             // Bağlantı kurulduktan sonra webSocket'in hazır olduğundan emin ol
             if (webSocket == null) {
                 android.util.Log.e("SignalingClient", "WebSocket bağlantısı kurulamadı, register mesajı gönderilemedi")
+                pendingRegistration?.completeExceptionally(IllegalStateException("WebSocket connection failed"))
+                pendingRegistration = null
                 return
             }
         }
+        
+        // Registration için CompletableDeferred oluştur
+        pendingRegistration = CompletableDeferred()
+        
         android.util.Log.d("SignalingClient", "Register mesajı gönderiliyor: phoneNumber=$phoneNumber, name=$name")
         send(SignalingMessage.Register(phoneNumber, name, null))
+        
+        // Registration tamamlanana kadar bekle (timeout ile)
+        try {
+            kotlinx.coroutines.withTimeout(5000) {
+                pendingRegistration?.await()
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("SignalingClient", "Registration timeout veya hata", e)
+            pendingRegistration = null
+            throw e
+        }
     }
     
     // Otomatik reconnect başlat
@@ -239,20 +258,13 @@ class SignalingClient(
         if (!isRegistered) {
             android.util.Log.w("SignalingClient", "Kullanıcı kayıtlı değil! Önce registerToBackend() çağrılmalı. Kayıt yapılıyor...")
             // Telefon numarasını callerPhoneNumber'dan al
-            register(callerPhoneNumber, callerName)
-            
-            // Register mesajının gelmesini bekle (max 5 saniye)
-            var waitCount = 0
-            while (!isRegistered && waitCount < 50) {
-                delay(100)
-                waitCount++
-            }
-            
-            if (!isRegistered) {
-                android.util.Log.e("SignalingClient", "Kayıt zaman aşımı, arama başlatılamadı")
+            try {
+                register(callerPhoneNumber, callerName) // Bu artık await ile bekliyor
+                android.util.Log.d("SignalingClient", "Kayıt tamamlandı, arama başlatılıyor")
+            } catch (e: Exception) {
+                android.util.Log.e("SignalingClient", "Kayıt başarısız, arama başlatılamadı", e)
                 return
             }
-            android.util.Log.d("SignalingClient", "Kayıt tamamlandı, arama başlatılıyor")
         }
         
         if (webSocket == null) {
@@ -427,6 +439,8 @@ class SignalingClient(
                     // Registered mesajı geldiğinde kayıt durumunu güncelle
                     if (message is SignalingMessage.Registered) {
                         isRegistered = true
+                        pendingRegistration?.complete(Unit) // Registration tamamlandı
+                        pendingRegistration = null
                     }
                     _messages.tryEmit(message)
                 }

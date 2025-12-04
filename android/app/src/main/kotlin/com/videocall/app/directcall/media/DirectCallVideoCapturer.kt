@@ -220,11 +220,13 @@ class DirectCallVideoCapturer(context: Context) {
             // Frame'i YUV420 formatına çevir
             val yuvFrame = imageToYuv420(image)
             
-            // Buffer'a ekle (queue doluysa en eski frame'i at)
-            if (!frameQueue.offer(yuvFrame)) {
-                // Queue dolu, en eski frame'i çıkar ve yenisini ekle
-                frameQueue.poll()
-                frameQueue.offer(yuvFrame)
+            // Buffer'a ekle (atomic operation - queue doluysa en eski frame'i at)
+            synchronized(frameQueue) {
+                if (!frameQueue.offer(yuvFrame)) {
+                    // Queue dolu, en eski frame'i çıkar ve yenisini ekle (atomic)
+                    frameQueue.poll()
+                    frameQueue.offer(yuvFrame)
+                }
             }
             
         } catch (e: Exception) {
