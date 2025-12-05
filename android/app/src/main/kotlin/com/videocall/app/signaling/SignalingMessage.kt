@@ -229,6 +229,10 @@ sealed interface SignalingMessage {
         override val type: String = "registered"
     }
 
+    data class RegisterError(val message: String, val originalPhoneNumber: String? = null) : SignalingMessage {
+        override val type: String = "register-error"
+    }
+
     // Login/Logout mesajları
     data class LoggedIn(val phoneNumber: String, val name: String?, val timestamp: String) : SignalingMessage {
         override val type: String = "logged-in"
@@ -717,6 +721,12 @@ sealed interface SignalingMessage {
                 "otp-error" -> {
                     OTPError(message = json.getString("message"))
                 }
+                "register-error" -> {
+                    RegisterError(
+                        message = json.getString("message"),
+                        originalPhoneNumber = json.optString("originalPhoneNumber").takeIf { it.isNotEmpty() }
+                    )
+                }
                 // Firebase kaldırıldı - WebSocket kullanıyoruz (bağımsız yapı)
                 "call-request-sent" -> {
                     CallRequestSent(
@@ -856,11 +866,11 @@ sealed interface SignalingMessage {
                 }
                 "group-info" -> {
                     val membersArray = json.getJSONArray("members")
-                    val members = (0 until membersArray.length()).map {
-                        val memberObj = membersArray.getJSONObject(it)
+                    val members = (0 until membersArray.length()).map { index ->
+                        val memberObj = membersArray.getJSONObject(index)
                         GroupMemberInfo(
                             phoneNumber = memberObj.getString("phoneNumber"),
-                            name = memberObj.optString("name").takeIf { it.isNotEmpty() },
+                            name = memberObj.optString("name").takeIf { name -> name.isNotEmpty() },
                             isOnline = memberObj.getBoolean("isOnline")
                         )
                     }
@@ -907,11 +917,11 @@ sealed interface SignalingMessage {
                 }
                 "blocked-users-list" -> {
                     val blockedUsersArray = json.getJSONArray("blockedUsers")
-                    val blockedUsers = (0 until blockedUsersArray.length()).map {
-                        val userObj = blockedUsersArray.getJSONObject(it)
+                    val blockedUsers = (0 until blockedUsersArray.length()).map { index ->
+                        val userObj = blockedUsersArray.getJSONObject(index)
                         BlockedUserInfo(
                             phoneNumber = userObj.getString("phoneNumber"),
-                            name = userObj.optString("name").takeIf { it.isNotEmpty() },
+                            name = userObj.optString("name").takeIf { name -> name.isNotEmpty() },
                             isOnline = userObj.getBoolean("isOnline")
                         )
                     }
@@ -1081,6 +1091,7 @@ sealed interface SignalingMessage {
                     message.name?.let { json.put("name", it) }
                     message.otp?.let { json.put("otp", it) }
                 }
+                // RegisterError sadece backend'den gelir, client'tan gönderilmez
                 is RequestOTP -> {
                     json.put("phoneNumber", message.phoneNumber)
                 }
@@ -1138,6 +1149,7 @@ sealed interface SignalingMessage {
                 }
                 // Backend'den gelen mesajlar (toJson'da kullanılmaz, sadece fromJson'da)
                 is Registered,
+                is RegisterError,
                 is LoggedIn,
                 is LoggedOut,
                 is CallRequestSent,

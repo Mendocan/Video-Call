@@ -4,8 +4,8 @@ const userSchema = new mongoose.Schema({
   userId: {
     type: String,
     required: true,
-    unique: true,
-    index: true
+    unique: true
+    // index: schema.index() ile tanımlanıyor
   },
   name: {
     type: String,
@@ -15,14 +15,14 @@ const userSchema = new mongoose.Schema({
     type: String,
     required: true,
     unique: true,
-    sparse: true, // null değerlere izin ver
-    index: true
+    sparse: true // null değerlere izin ver
+    // index: schema.index() ile tanımlanıyor
   },
   phone: {
     type: String,
     unique: true,
-    sparse: true, // null değerlere izin ver
-    index: true
+    sparse: true // null değerlere izin ver
+    // index: schema.index() ile tanımlanıyor
   },
   password: {
     type: String,
@@ -51,13 +51,13 @@ const userSchema = new mongoose.Schema({
   // Signaling server için durum bilgileri
   isOnline: {
     type: Boolean,
-    default: false,
-    index: true
+    default: false
+    // index: schema.index() ile tanımlanıyor (gerekirse)
   },
   lastSeen: {
     type: Date,
-    default: Date.now,
-    index: true
+    default: Date.now
+    // index: schema.index() ile tanımlanıyor (gerekirse)
   },
   createdAt: {
     type: Date,
@@ -68,9 +68,8 @@ const userSchema = new mongoose.Schema({
 });
 
 // Index'ler
-userSchema.index({ email: 1 });
-userSchema.index({ phone: 1 });
-userSchema.index({ userId: 1 });
+// NOT: email, phone, userId zaten unique: true olduğu için otomatik index oluşturuluyor
+// Bu yüzden schema.index() çağrıları kaldırıldı (duplicate index uyarısını önlemek için)
 
 // Şifreyi response'dan çıkar
 userSchema.methods.toJSON = function() {

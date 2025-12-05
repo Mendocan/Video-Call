@@ -464,11 +464,17 @@ class VideoCallViewModel(
                         }
                         
                         android.util.Log.d("VideoCallViewModel", "✅ WebSocket bağlantısı hazır, register mesajı gönderiliyor...")
-                        signalingClient.register(normalizedPhoneNumber, name)
-                        // Reconnect'i etkinleştir
-                        signalingClient.enableReconnect()
-                        android.util.Log.d("VideoCallViewModel", "✅ Kullanıcı kaydı mesajı gönderildi")
-                        _uiState.update { it.copy(statusMessage = "Sunucuya bağlandı") }
+                        try {
+                            signalingClient.register(normalizedPhoneNumber, name)
+                            // Reconnect'i etkinleştir
+                            signalingClient.enableReconnect()
+                            android.util.Log.d("VideoCallViewModel", "✅ Kullanıcı kaydı başarılı: phoneNumber=$normalizedPhoneNumber")
+                            _uiState.update { it.copy(statusMessage = "Sunucuya bağlandı") }
+                        } catch (e: Exception) {
+                            android.util.Log.e("VideoCallViewModel", "❌ Register mesajı gönderilemedi veya timeout", e)
+                            _uiState.update { it.copy(statusMessage = "Kayıt başarısız: ${e.message}") }
+                            throw e
+                        }
                     } catch (e: Exception) {
                         android.util.Log.e("VideoCallViewModel", "❌ Kayıt hatası", e)
                         _uiState.update { it.copy(statusMessage = "Sunucuya bağlanılamadı: ${e.message}") }
@@ -736,11 +742,14 @@ class VideoCallViewModel(
         }
 
         viewModelScope.launch {
-            val usedDirect = contact.phoneNumber != null && attemptDirectCall(contact)
-            if (usedDirect) {
-                return@launch
-            }
+            // Direct call şimdilik devre dışı (in-memory presence repository farklı cihazlarda çalışmıyor)
+            // TODO: Gerçek backend presence servisi implementasyonu sonrası aktif edilecek
+            // val usedDirect = contact.phoneNumber != null && attemptDirectCall(contact)
+            // if (usedDirect) {
+            //     return@launch
+            // }
 
+            // Doğrudan cloud signaling kullan
             signalingMode = SignalingMode.CLOUD
             directChannel = DirectChannel.NONE
             
@@ -2886,7 +2895,18 @@ class VideoCallViewModel(
             }
         }
         when (message) {
-            is SignalingMessage.Offer -> handleIncomingOffer(source, message)
+            is SignalingMessage.Offer -> {
+                // acceptIncomingCall() çağrıldıktan sonra gelen offer'lar için de işle
+                val currentActiveRoom = activeRoom // Local copy to avoid smart cast issue
+                if (_incomingCall.value == null && currentActiveRoom != null && currentActiveRoom.isNotBlank()) {
+                    // Arama kabul edilmiş, offer'ı işle ve answer gönder
+                    android.util.Log.d("VideoCallViewModel", "Arama kabul edilmiş, gelen offer işleniyor: roomCode=$currentActiveRoom")
+                    handleRemoteOffer(message.sdp)
+                } else {
+                    // Yeni incoming call için
+                    handleIncomingOffer(source, message)
+                }
+            }
             is SignalingMessage.Answer -> {
                 directCallClient.setRemoteDescription(message.sdp, isOffer = false)
             }
@@ -2937,6 +2957,15 @@ class VideoCallViewModel(
                 }
                 // Kayıt başarılı - artık backend'de kayıtlıyız
                 // Firebase kaldırıldı - WebSocket kullanıyoruz (bağımsız yapı)
+                android.util.Log.d("VideoCallViewModel", "✅ Backend'de kayıtlı: phoneNumber=${message.phoneNumber}, test sayfasında görünmeli")
+            }
+            is SignalingMessage.RegisterError -> {
+                android.util.Log.e("VideoCallViewModel", "❌ Kayıt hatası: ${message.message}, originalPhoneNumber=${message.originalPhoneNumber}")
+                _uiState.update { 
+                    it.copy(
+                        statusMessage = "Kayıt hatası: ${message.message}"
+                    ) 
+                }
             }
             is SignalingMessage.LoggedIn -> {
                 android.util.Log.i("VideoCallViewModel", "✅ Giriş başarılı: phoneNumber=${message.phoneNumber}, name=${message.name}")
@@ -3009,9 +3038,52 @@ class VideoCallViewModel(
                 }
                 // Room'a bağlan ve offer gönder
                 viewModelScope.launch {
-                    signalingClient.connect(message.roomCode)
-                    val offer = directCallClient.createOffer(audioOnly = _uiState.value.isAudioOnly)
-                    sendOffer(offer)
+                    try {
+                        android.util.Log.d("VideoCallViewModel", "CallAccepted: Room'a bağlanılıyor: ${message.roomCode}")
+                        signalingClient.connect(message.roomCode)
+                        
+                        // Room bağlantısının kurulmasını bekle (timing sorunu için)
+                        var waitCount = 0
+                        val currentStatus = signalingClient.status.value
+                        if (currentStatus !is SignalingStatus.Connected) {
+                            while (signalingClient.status.value !is SignalingStatus.Connected && waitCount < 50) {
+                                delay(100)
+                                waitCount++
+                                kotlinx.coroutines.yield()
+                            }
+                        }
+                        
+                        if (signalingClient.status.value !is SignalingStatus.Connected) {
+                            android.util.Log.e("VideoCallViewModel", "CallAccepted: Room bağlantısı kurulamadı")
+                            _uiState.update { 
+                                it.copy(
+                                    statusMessage = "Bağlantı kurulamadı"
+                                ) 
+                            }
+                            return@launch
+                        }
+                        
+                        // Kısa bir gecikme ekle (timing sorunu için)
+                        delay(300)
+                        
+                        android.util.Log.d("VideoCallViewModel", "CallAccepted: Offer gönderiliyor...")
+                        val offer = directCallClient.createOffer(audioOnly = _uiState.value.isAudioOnly)
+                        sendOffer(offer)
+                        android.util.Log.d("VideoCallViewModel", "CallAccepted: Offer gönderildi")
+                        
+                        _uiState.update { 
+                            it.copy(
+                                statusMessage = "Teklif gönderildi, yanıt bekleniyor..."
+                            ) 
+                        }
+                    } catch (e: Exception) {
+                        android.util.Log.e("VideoCallViewModel", "CallAccepted: Offer gönderme hatası", e)
+                        _uiState.update { 
+                            it.copy(
+                                statusMessage = "Bağlantı kurulamadı: ${e.message}"
+                            ) 
+                        }
+                    }
                 }
             }
             is SignalingMessage.CallAcceptedBy -> {
@@ -3027,16 +3099,45 @@ class VideoCallViewModel(
                 // Room'a bağlan ve offer gönder
                 viewModelScope.launch {
                     try {
+                        android.util.Log.d("VideoCallViewModel", "CallAcceptedBy: Room'a bağlanılıyor: ${message.roomCode}")
                         signalingClient.connect(message.roomCode)
+                        
+                        // Room bağlantısının kurulmasını bekle (timing sorunu için)
+                        var waitCount = 0
+                        val currentStatus = signalingClient.status.value
+                        if (currentStatus !is SignalingStatus.Connected) {
+                            while (signalingClient.status.value !is SignalingStatus.Connected && waitCount < 50) {
+                                delay(100)
+                                waitCount++
+                                kotlinx.coroutines.yield()
+                            }
+                        }
+                        
+                        if (signalingClient.status.value !is SignalingStatus.Connected) {
+                            android.util.Log.e("VideoCallViewModel", "CallAcceptedBy: Room bağlantısı kurulamadı")
+                            _uiState.update { 
+                                it.copy(
+                                    statusMessage = "Bağlantı kurulamadı"
+                                ) 
+                            }
+                            return@launch
+                        }
+                        
+                        // Kısa bir gecikme ekle (timing sorunu için)
+                        delay(300)
+                        
+                        android.util.Log.d("VideoCallViewModel", "CallAcceptedBy: Offer gönderiliyor...")
                         val offer = directCallClient.createOffer(audioOnly = _uiState.value.isAudioOnly)
                         sendOffer(offer)
+                        android.util.Log.d("VideoCallViewModel", "CallAcceptedBy: Offer gönderildi")
+                        
                         _uiState.update { 
                             it.copy(
                                 statusMessage = "Teklif gönderildi, yanıt bekleniyor..."
                             ) 
                         }
                     } catch (e: Exception) {
-                        android.util.Log.e("VideoCallViewModel", "Offer gönderme hatası", e)
+                        android.util.Log.e("VideoCallViewModel", "CallAcceptedBy: Offer gönderme hatası", e)
                         _uiState.update { 
                             it.copy(
                                 statusMessage = "Bağlantı kurulamadı: ${e.message}"
@@ -3252,13 +3353,46 @@ class VideoCallViewModel(
         viewModelScope.launch {
             try {
                 // Room'a bağlan
+                android.util.Log.d("VideoCallViewModel", "Room'a bağlanılıyor: ${call.roomCode}")
                 signalingClient.connect(call.roomCode)
+                
+                // Room bağlantısının kurulmasını bekle (timing sorunu için)
+                var waitCount = 0
+                val currentStatus = signalingClient.status.value
+                if (currentStatus !is SignalingStatus.Connected) {
+                    while (signalingClient.status.value !is SignalingStatus.Connected && waitCount < 50) {
+                        delay(100)
+                        waitCount++
+                        kotlinx.coroutines.yield()
+                    }
+                }
+                
+                if (signalingClient.status.value !is SignalingStatus.Connected) {
+                    android.util.Log.e("VideoCallViewModel", "Room bağlantısı kurulamadı")
+                    _uiState.update { 
+                        it.copy(
+                            statusMessage = "Bağlantı kurulamadı"
+                        ) 
+                    }
+                    return@launch
+                }
+                
+                // Kısa bir gecikme ekle (timing sorunu için)
+                delay(300)
                 
                 // Video track'leri başlat (gelen arama için)
                 directCallClient.setVideoEnabled(true)
                 
-                // Gelen arama için answer göndermek için remote offer'ı beklemeliyiz
-                // Backend'den offer gelecek, o zaman answer göndereceğiz
+                android.util.Log.d("VideoCallViewModel", "Gelen arama için offer gönderiliyor...")
+                
+                // Gelen arama tarafı da offer gönderebilir (her iki taraf da offer gönderebilir)
+                // İlk gelen offer'a answer gönderilir
+                val isAudioOnly = _uiState.value.isAudioOnly
+                val offer = directCallClient.createOffer(audioOnly = isAudioOnly)
+                sendOffer(offer)
+                
+                android.util.Log.d("VideoCallViewModel", "Offer gönderildi, answer bekleniyor...")
+                
                 _uiState.update { 
                     it.copy(
                         statusMessage = "Bağlantı kuruluyor..."

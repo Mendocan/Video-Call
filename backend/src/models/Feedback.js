@@ -3,8 +3,8 @@ import mongoose from 'mongoose';
 const feedbackSchema = new mongoose.Schema({
   userId: {
     type: String,
-    default: null,
-    index: true
+    default: null
+    // index: schema.index() ile tanımlanıyor
   },
   email: {
     type: String,
@@ -12,14 +12,14 @@ const feedbackSchema = new mongoose.Schema({
   },
   phoneNumber: {
     type: String,
-    default: null,
-    index: true
+    default: null
+    // index: schema.index() ile tanımlanıyor
   },
   type: {
     type: String,
     enum: ['bug', 'feature', 'general'],
-    required: true,
-    index: true
+    required: true
+    // index: schema.index() ile tanımlanıyor
   },
   subject: {
     type: String,
@@ -37,8 +37,8 @@ const feedbackSchema = new mongoose.Schema({
   },
   createdAt: {
     type: Date,
-    default: Date.now,
-    index: true
+    default: Date.now
+    // index: schema.index() ile tanımlanıyor
   }
 }, {
   timestamps: false // createdAt manuel olarak yönetiliyor

@@ -92,15 +92,36 @@ class SignalingClient(
         registeredPhoneNumber = phoneNumber
         registeredName = name
         
-        if (!isRegistered) {
+        // WebSocket bağlantısını kontrol et
+        val currentStatus = _status.value
+        if (currentStatus !is SignalingStatus.Connected) {
+            android.util.Log.d("SignalingClient", "Register: WebSocket bağlantısı yok, bağlanılıyor...")
             connect()
-            // Bağlantı kurulduktan sonra webSocket'in hazır olduğundan emin ol
-            if (webSocket == null) {
-                android.util.Log.e("SignalingClient", "WebSocket bağlantısı kurulamadı, register mesajı gönderilemedi")
-                pendingRegistration?.completeExceptionally(IllegalStateException("WebSocket connection failed"))
-                pendingRegistration = null
-                return
+            // Bağlantının kurulmasını bekle
+            var waitCount = 0
+            while (_status.value !is SignalingStatus.Connected && waitCount < 50) {
+                delay(100)
+                waitCount++
+                kotlinx.coroutines.yield()
             }
+            if (_status.value !is SignalingStatus.Connected) {
+                android.util.Log.e("SignalingClient", "Register: WebSocket bağlantısı kurulamadı")
+                throw IllegalStateException("WebSocket connection failed")
+            }
+        }
+        
+        // WebSocket'in hazır olduğundan emin ol
+        if (webSocket == null) {
+            android.util.Log.e("SignalingClient", "Register: WebSocket null, bağlantı kurulamadı")
+            throw IllegalStateException("WebSocket is null")
+        }
+        
+        android.util.Log.d("SignalingClient", "Register: WebSocket bağlantısı hazır, status=$currentStatus, isRegistered=$isRegistered, webSocket=${if (webSocket != null) "NOT_NULL" else "NULL"}")
+        
+        // Eğer zaten kayıtlıysa tekrar kayıt yapma
+        if (isRegistered) {
+            android.util.Log.d("SignalingClient", "Register: Zaten kayıtlı, tekrar kayıt yapılmıyor")
+            return
         }
         
         // Registration için CompletableDeferred oluştur
@@ -108,14 +129,16 @@ class SignalingClient(
         
         android.util.Log.d("SignalingClient", "Register mesajı gönderiliyor: phoneNumber=$phoneNumber, name=$name")
         send(SignalingMessage.Register(phoneNumber, name, null))
+        android.util.Log.d("SignalingClient", "Register mesajı gönderildi, yanıt bekleniyor...")
         
         // Registration tamamlanana kadar bekle (timeout ile)
         try {
-            kotlinx.coroutines.withTimeout(5000) {
+            kotlinx.coroutines.withTimeout(10000) { // 10 saniye timeout (5 saniye yeterli değil)
                 pendingRegistration?.await()
             }
+            android.util.Log.d("SignalingClient", "Register: Registration başarılı, isRegistered=$isRegistered")
         } catch (e: Exception) {
-            android.util.Log.e("SignalingClient", "Registration timeout veya hata", e)
+            android.util.Log.e("SignalingClient", "Register: Registration timeout veya hata", e)
             pendingRegistration = null
             throw e
         }
@@ -398,19 +421,27 @@ class SignalingClient(
 
     fun send(message: SignalingMessage) {
         if (webSocket == null) {
-            android.util.Log.e("SignalingClient", "WebSocket null, mesaj gönderilemedi: ${message.type}")
+            android.util.Log.e("SignalingClient", "❌ WebSocket null, mesaj gönderilemedi: ${message.type}")
             return
         }
+        
+        // Bağlantı durumunu kontrol et
+        val currentStatus = _status.value
+        if (currentStatus !is SignalingStatus.Connected) {
+            android.util.Log.e("SignalingClient", "❌ WebSocket bağlantısı yok (durum: $currentStatus), mesaj gönderilemedi: ${message.type}")
+            return
+        }
+        
         try {
             val json = SignalingMessage.toJson(message)
             val sent = webSocket!!.send(json)
             if (!sent) {
-                android.util.Log.e("SignalingClient", "Mesaj gönderilemedi (queue dolu): ${message.type}")
+                android.util.Log.e("SignalingClient", "❌ Mesaj gönderilemedi (queue dolu veya bağlantı kapalı): ${message.type}")
             } else {
-                android.util.Log.d("SignalingClient", "Mesaj gönderildi: ${message.type}")
+                android.util.Log.d("SignalingClient", "✅ Mesaj gönderildi: ${message.type}, status=$currentStatus")
             }
         } catch (e: Exception) {
-            android.util.Log.e("SignalingClient", "Mesaj gönderme hatası: ${message.type}", e)
+            android.util.Log.e("SignalingClient", "❌ Mesaj gönderme hatası: ${message.type}", e)
         }
     }
 
@@ -421,28 +452,41 @@ class SignalingClient(
                 reconnectAttempts = 0
                 shouldReconnect = false // Başarılı bağlantı sonrası reconnect'i durdur
                 
-                android.util.Log.d("SignalingClient", "WebSocket bağlantısı başarılı")
+                android.util.Log.d("SignalingClient", "✅ WebSocket bağlantısı başarılı: roomCode=$roomCode, responseCode=${response.code}")
+                this@SignalingClient.webSocket = webSocket
                 
                 if (roomCode != null) {
                     activeRoom = roomCode
                     _status.value = SignalingStatus.Connected(roomCode)
                     send(SignalingMessage.Join(roomCode))
+                    android.util.Log.d("SignalingClient", "Join mesajı gönderildi: roomCode=$roomCode")
                 } else {
                     _status.value = SignalingStatus.Connected("")
+                    android.util.Log.d("SignalingClient", "WebSocket bağlantısı kuruldu (room code yok)")
                 }
                 pendingOpen?.complete(Unit)
                 pendingOpen = null
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                android.util.Log.d("SignalingClient", "Mesaj alındı: ${text.take(100)}...")
                 SignalingMessage.fromJson(text)?.let { message ->
+                    android.util.Log.d("SignalingClient", "Mesaj parse edildi: type=${message.type}")
                     // Registered mesajı geldiğinde kayıt durumunu güncelle
                     if (message is SignalingMessage.Registered) {
+                        android.util.Log.i("SignalingClient", "✅ Registered mesajı alındı: phoneNumber=${message.phoneNumber}, name=${message.name}")
                         isRegistered = true
                         pendingRegistration?.complete(Unit) // Registration tamamlandı
                         pendingRegistration = null
+                    } else if (message is SignalingMessage.RegisterError) {
+                        android.util.Log.e("SignalingClient", "❌ RegisterError mesajı alındı: ${message.message}")
+                        // Register hatası geldiğinde pending registration'ı iptal et
+                        pendingRegistration?.completeExceptionally(Exception(message.message))
+                        pendingRegistration = null
                     }
                     _messages.tryEmit(message)
+                } ?: run {
+                    android.util.Log.w("SignalingClient", "⚠️ Mesaj parse edilemedi: $text")
                 }
             }
 

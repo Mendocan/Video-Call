@@ -193,10 +193,9 @@ fun VideoCallApp(viewModel: VideoCallViewModel) {
         viewModel.updateContactsPermission(granted)
     }
 
-    // Tab bar: Sohbetler, Görüşmeler, Kişi Ekleme, Takvim
+    // Tab bar: Ana Sayfa (Sohbetler ve Görüşmeler birleştirilmiş), Kişi Ekleme, Takvim
     val destinations = listOf(
-        VideoCallDestination.Chat,      // Sohbetler
-        VideoCallDestination.Call,      // Görüşmeler
+        VideoCallDestination.Home,      // Ana Sayfa (Sohbetler ve Görüşmeler birleştirilmiş)
         VideoCallDestination.Contacts,   // Kişi Ekleme
         VideoCallDestination.Stories    // Hikayeler
     )
@@ -469,6 +468,7 @@ fun VideoCallApp(viewModel: VideoCallViewModel) {
                     
                     HomeScreen(
                         addedContacts = addedContacts,
+                        viewModel = viewModel,
                         onNavigateToSettings = { navController.navigate(VideoCallDestination.Settings.route) },
                         onStartCallWithContact = { contact ->
                             // Görüşme başlatmadan önce abonelik kontrolü - Test için devre dışı
@@ -484,8 +484,10 @@ fun VideoCallApp(viewModel: VideoCallViewModel) {
                             viewModel.removeContact(contact)
                         },
                         onContactClick = { contact ->
-                            // Kişiye tıklandığında chat'e git
-                            navController.navigate(VideoCallDestination.Chat.route)
+                            // Kişiye tıklandığında chat'e git - artık Home'da tab'lar var
+                        },
+                        onNavigateToCall = {
+                            navController.navigate(VideoCallDestination.Call.route)
                         }
                     )
                 }

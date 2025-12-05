@@ -5,13 +5,13 @@ const subscriptionCodeSchema = new mongoose.Schema({
     type: String,
     required: true,
     unique: true,
-    index: true,
     uppercase: true // "VC-XXXX-XXXX-XXXX" formatında
+    // index: schema.index() ile tanımlanıyor
   },
   phoneNumber: {
     type: String,
-    default: null,
-    index: true
+    default: null
+    // index: schema.index() ile tanımlanıyor
   },
   planId: {
     type: String,
@@ -23,8 +23,8 @@ const subscriptionCodeSchema = new mongoose.Schema({
   },
   used: {
     type: Boolean,
-    default: false,
-    index: true
+    default: false
+    // index: schema.index() ile tanımlanıyor
   },
   usedAt: {
     type: Date,
@@ -41,8 +41,8 @@ const subscriptionCodeSchema = new mongoose.Schema({
   },
   subscriptionId: {
     type: String,
-    default: null,
-    index: true
+    default: null
+    // index: schema.index() ile tanımlanıyor
   },
   createdAt: {
     type: Date,
@@ -53,7 +53,7 @@ const subscriptionCodeSchema = new mongoose.Schema({
 });
 
 // Index'ler
-subscriptionCodeSchema.index({ code: 1 });
+// NOT: code zaten unique: true olduğu için otomatik index oluşturuluyor
 subscriptionCodeSchema.index({ phoneNumber: 1 });
 subscriptionCodeSchema.index({ used: 1 });
 subscriptionCodeSchema.index({ subscriptionId: 1 });

@@ -15,41 +15,39 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.ui.res.painterResource
-import com.videocall.app.R
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.VideoCall
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import com.videocall.app.R
 import com.videocall.app.model.Contact
 import com.videocall.app.model.UserStatus
 import com.videocall.app.ui.theme.Teal
+import com.videocall.app.viewmodel.VideoCallViewModel
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     modifier: Modifier = Modifier,
     addedContacts: List<Contact>,
+    viewModel: VideoCallViewModel,
     onNavigateToSettings: () -> Unit,
     onStartCallWithContact: (Contact) -> Unit,
     onRemoveContact: (Contact) -> Unit,
-    onContactClick: (Contact) -> Unit = {}
+    onContactClick: (Contact) -> Unit = {},
+    onNavigateToCall: () -> Unit = {}
 ) {
+    var selectedTab by remember { mutableStateOf(0) }
     val complianceItems = listOf(
         "Tüm medya ve sinyalleşme trafiği TLS 1.3 üzerinden uçtan uca şifrelenir.",
         "Rehber verileri yalnızca davet sürecinde okunur, sunucuya kaydedilmez.",
@@ -66,99 +64,93 @@ fun HomeScreen(
     }
 
     Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        modifier = modifier.fillMaxSize()
     ) {
-        // Logo - büyütüldü (40dp -> 60dp, 1.5x)
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Image(
-                painter = painterResource(id = R.drawable.logo),
-                contentDescription = "Video Call Logo",
-                modifier = Modifier.size(60.dp)
+        // Tab Row
+        TabRow(selectedTabIndex = selectedTab) {
+            Tab(
+                selected = selectedTab == 0,
+                onClick = { selectedTab = 0 },
+                text = { Text("Sohbetler") }
+            )
+            Tab(
+                selected = selectedTab == 1,
+                onClick = { selectedTab = 1 },
+                text = { Text("Görüşmeler") }
             )
         }
 
-        // İzin uyarısı (izin yoksa)
-        if (!contactsPermissionGranted) {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        text = "⚠️ İzin Gerekli",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onErrorContainer
-                    )
-                    Text(
-                        text = "Kişileri eklemek ve görüntülemek için Rehber izni gereklidir. Lütfen Ayarlar'dan izinleri verin.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onErrorContainer
-                    )
-                    Button(
-                        onClick = onNavigateToSettings,
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.error
-                        )
-                    ) {
-                        Text("Ayarlara Git")
-                    }
-                }
+        // Tab Content
+        when (selectedTab) {
+            0 -> {
+                // Sohbetler Tab
+                ChatScreen(
+                    viewModel = viewModel,
+                    addedContacts = addedContacts,
+                    modifier = Modifier.fillMaxSize()
+                )
             }
-        }
-
-        // ActionCard kaldırıldı - Tab bar üzerinden erişilebilir
-
-        if (addedContacts.isNotEmpty()) {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                modifier = Modifier.fillMaxWidth()
-            ) {
+            1 -> {
+                // Görüşmeler Tab - CallHistory içeriği
+                val callHistory by viewModel.callHistory.collectAsState()
                 Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
                     Text(
-                        text = "Ekli Kişiler",
-                        style = MaterialTheme.typography.titleMedium
+                        text = "Görüşmeler",
+                        style = MaterialTheme.typography.headlineMedium
                     )
-                    LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        items(addedContacts) { contact ->
-                            AddedContactItem(
-                                contact = contact,
-                                onCallClick = { onStartCallWithContact(contact) },
-                                onRemoveClick = { onRemoveContact(contact) },
-                                onClick = { onContactClick(contact) }
+                    
+                    if (callHistory.isEmpty()) {
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = "Henüz görüşme geçmişi yok",
+                                modifier = Modifier.padding(16.dp),
+                                style = MaterialTheme.typography.bodyMedium
                             )
                         }
-                    }
-                }
-            }
-        }
-
-        Card(
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(
-                    text = "Güvenlik ve Uyumluluk",
-                    style = MaterialTheme.typography.titleMedium
-                )
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(complianceItems) { item ->
-                        Text("• $item", style = MaterialTheme.typography.bodyMedium)
+                    } else {
+                        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            items(callHistory) { call ->
+                                Card(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(16.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = call.contactName ?: call.phoneNumber,
+                                                style = MaterialTheme.typography.bodyLarge
+                                            )
+                                            // phoneNumber zaten non-nullable, sadece boş olup olmadığını kontrol et
+                                            if (call.phoneNumber.isNotBlank()) {
+                                                Text(
+                                                    text = call.phoneNumber,
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                        }
+                                        Text(
+                                            text = call.duration?.let { "${it / 60}:${String.format("%02d", it % 60)}" } ?: "--:--",
+                                            style = MaterialTheme.typography.bodyMedium
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }

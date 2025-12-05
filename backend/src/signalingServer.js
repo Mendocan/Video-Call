@@ -237,6 +237,10 @@ const server = createServer((req, res) => {
       .map(([ws, conn]) => {
         // Kayıtlı kullanıcı bilgilerini userRegistry'den al
         const registeredUser = conn.phoneNumber ? userRegistry.get(conn.phoneNumber) : null;
+        
+        // Debug: Connection bilgilerini logla
+        console.log(`[Test] Connection: IP=${conn.clientIP}, phoneNumber=${conn.phoneNumber || 'null'}, isRegistered=${conn.isRegistered}, wsState=${ws.readyState}`);
+        
         return {
           phoneNumber: conn.phoneNumber || 'Kayıtsız',
           name: conn.name || registeredUser?.name || 'İsimsiz',
@@ -246,6 +250,12 @@ const server = createServer((req, res) => {
           wsState: ws.readyState // Debug için
         };
       });
+    
+    // Debug: Tüm bağlantıları logla
+    console.log(`[Test] Toplam bağlantı: ${connections.size}, Açık bağlantı: ${connectionsList.length}, Kayıtlı kullanıcı: ${userRegistry.size}`);
+    connections.forEach((conn, ws) => {
+      console.log(`[Test] Connection detail: IP=${conn.clientIP}, phoneNumber=${conn.phoneNumber || 'null'}, isRegistered=${conn.isRegistered}, wsState=${ws.readyState}`);
+    });
     
     const html = `<!DOCTYPE html>
 <html lang="tr">
@@ -454,14 +464,22 @@ function handleMessage(ws, message) {
       // Offer'ı aynı odadaki diğer TÜM bağlantılara gönder (grup görüşme desteği)
       // Her katılımcı kendi peer connection'ını yönetir
       if (roomCode) {
+        console.log(`[Signaling] Offer alındı: roomCode=${roomCode}, sender=${connectionInfo?.phoneNumber || 'unknown'}`);
         broadcastToRoom(roomCode, ws, message);
+        console.log(`[Signaling] Offer broadcast edildi: roomCode=${roomCode}`);
+      } else {
+        console.warn(`[Signaling] Offer alındı ama roomCode yok: sender=${connectionInfo?.phoneNumber || 'unknown'}`);
       }
       break;
 
     case 'answer':
       // Answer'ı aynı odadaki diğer TÜM bağlantılara gönder
       if (roomCode) {
+        console.log(`[Signaling] Answer alındı: roomCode=${roomCode}, sender=${connectionInfo?.phoneNumber || 'unknown'}`);
         broadcastToRoom(roomCode, ws, message);
+        console.log(`[Signaling] Answer broadcast edildi: roomCode=${roomCode}`);
+      } else {
+        console.warn(`[Signaling] Answer alındı ama roomCode yok: sender=${connectionInfo?.phoneNumber || 'unknown'}`);
       }
       break;
 
@@ -634,10 +652,17 @@ function handleMessage(ws, message) {
 // Grup görüşme desteği: Mesajlar odadaki tüm katılımcılara iletilir
 function broadcastToRoom(roomCode, senderWs, message) {
   const room = rooms.get(roomCode);
-  if (!room) return;
+  if (!room) {
+    console.warn(`[Signaling] broadcastToRoom: Room bulunamadı: roomCode=${roomCode}`);
+    return;
+  }
 
   const messageStr = JSON.stringify(message);
   let sentCount = 0;
+  const senderInfo = connections.get(senderWs);
+  const senderPhone = senderInfo?.phoneNumber || 'unknown';
+
+  console.log(`[Signaling] broadcastToRoom: roomCode=${roomCode}, sender=${senderPhone}, roomSize=${room.length}, messageType=${message.type}`);
 
   room.forEach((client) => {
     // Gönderen hariç, açık olan tüm bağlantılara gönder
@@ -645,6 +670,9 @@ function broadcastToRoom(roomCode, senderWs, message) {
       try {
         client.send(messageStr);
         sentCount++;
+        const receiverInfo = connections.get(client);
+        const receiverPhone = receiverInfo?.phoneNumber || 'unknown';
+        console.log(`[Signaling] Mesaj gönderildi: sender=${senderPhone} -> receiver=${receiverPhone}, type=${message.type}`);
       } catch (error) {
         console.error(`[Signaling] Mesaj gönderme hatası:`, error);
       }
@@ -653,7 +681,9 @@ function broadcastToRoom(roomCode, senderWs, message) {
 
   if (sentCount > 0) {
     const participantCount = participants.get(roomCode)?.length || room.length;
-    console.log(`[Signaling] Mesaj gönderildi: room=${roomCode}, type=${message.type}, recipients=${sentCount}/${participantCount}`);
+    console.log(`[Signaling] Broadcast tamamlandı: roomCode=${roomCode}, ${sentCount}/${room.length - 1} mesaj gönderildi, messageType=${message.type}, participants=${participantCount}`);
+  } else {
+    console.warn(`[Signaling] Broadcast başarısız: roomCode=${roomCode}, messageType=${message.type}, roomSize=${room.length}, sender=${senderPhone}`);
   }
 }
 
@@ -996,6 +1026,15 @@ async function handleRegister(ws, message) {
   console.log(`[Signaling] ✅ Kullanıcı başarıyla kaydedildi: phoneNumber=${normalizedPhoneNumber} (original: ${phoneNumber}), name=${name || 'N/A'}, IP=${userInfo.clientIP}`);
   console.log(`[Signaling] 📊 Toplam kayıtlı kullanıcı sayısı: ${userRegistry.size}`);
   console.log(`[Signaling] 📋 Kayıtlı kullanıcılar:`, Array.from(userRegistry.keys()));
+  console.log(`[Signaling] 🔍 ConnectionInfo güncellendi: phoneNumber=${connectionInfo.phoneNumber}, isRegistered=${connectionInfo.isRegistered}, name=${connectionInfo.name || 'null'}`);
+  
+  // Test sayfası için doğrulama
+  const testConnectionInfo = connections.get(ws);
+  if (testConnectionInfo) {
+    console.log(`[Signaling] ✅ Test: ConnectionInfo doğrulandı - phoneNumber=${testConnectionInfo.phoneNumber}, isRegistered=${testConnectionInfo.isRegistered}`);
+  } else {
+    console.error(`[Signaling] ❌ Test: ConnectionInfo bulunamadı!`);
+  }
 
   // Başarı mesajı gönder
   try {
@@ -1741,6 +1780,19 @@ function handleCallAccept(ws, message) {
           name: memberName,
           timestamp: new Date().toISOString()
         }));
+        
+        // WebRTC bağlantısını başlatmak için room'daki diğer kullanıcılara bildir
+        // Her iki taraf da offer gönderebilir, ilk gelen offer'a answer gönderilir
+        console.log(`[Signaling] WebRTC bağlantısı başlatılıyor: roomCode=${roomCode}, members=${groupInfo.members.join(', ')}`);
+        
+        // Room'daki tüm kullanıcıların bağlı olduğundan emin ol
+        const roomConnections = rooms.get(roomCode) || [];
+        console.log(`[Signaling] Room bağlantıları: ${roomConnections.length} adet`);
+        
+        // Room'daki her kullanıcıya WebRTC başlatma mesajı gönder (opsiyonel)
+        // Aslında offer/answer exchange otomatik olarak başlayacak
+        // Bu sadece log için
+        console.log(`[Signaling] ✅ WebRTC bağlantısı hazır: roomCode=${roomCode}, arayan=${memberPhone}, aranan=${phoneNumber}`);
       } else {
         console.log(`[Signaling] call-accepted-by gönderilemedi: memberPhone=${memberPhone} bulunamadı veya offline (userRegistry.has=${userRegistry.has(memberPhone)}, readyState=${memberUser?.ws?.readyState})`);
       }

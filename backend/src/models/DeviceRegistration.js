@@ -3,13 +3,13 @@ import mongoose from 'mongoose';
 const deviceRegistrationSchema = new mongoose.Schema({
   phoneNumber: {
     type: String,
-    required: true,
-    index: true
+    required: true
+    // index: schema.index() ile tanımlanıyor
   },
   deviceId: {
     type: String, // hashed device ID
-    required: true,
-    index: true
+    required: true
+    // index: schema.index() ile tanımlanıyor
   },
   registeredAt: {
     type: Date,

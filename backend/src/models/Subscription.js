@@ -4,18 +4,18 @@ const subscriptionSchema = new mongoose.Schema({
   subscriptionId: {
     type: String,
     required: true,
-    unique: true,
-    index: true
+    unique: true
+    // index: schema.index() ile tanımlanıyor
   },
   userId: {
     type: String,
-    required: true,
-    index: true
+    required: true
+    // index: schema.index() ile tanımlanıyor
   },
   phoneNumber: {
     type: String,
-    required: true,
-    index: true
+    required: true
+    // index: schema.index() ile tanımlanıyor
   },
   planId: {
     type: String,
@@ -25,8 +25,8 @@ const subscriptionSchema = new mongoose.Schema({
     type: String,
     enum: ['active', 'expired', 'cancelled'],
     required: true,
-    default: 'active',
-    index: true
+    default: 'active'
+    // index: schema.index() ile tanımlanıyor
   },
   paymentId: {
     type: String,
@@ -38,15 +38,15 @@ const subscriptionSchema = new mongoose.Schema({
   },
   expiresAt: {
     type: Date,
-    required: true,
-    index: true
+    required: true
+    // index: schema.index() ile tanımlanıyor
   }
 }, {
   timestamps: false // createdAt manuel olarak yönetiliyor
 });
 
 // Index'ler
-subscriptionSchema.index({ subscriptionId: 1 });
+// NOT: subscriptionId zaten unique: true olduğu için otomatik index oluşturuluyor
 subscriptionSchema.index({ userId: 1 });
 subscriptionSchema.index({ phoneNumber: 1 });
 subscriptionSchema.index({ status: 1 });
