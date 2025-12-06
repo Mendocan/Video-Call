@@ -72,18 +72,12 @@ class SignalingClient(
         deferred.await()
     }
 
-    // Geriye dönük uyumluluk için (room code ile bağlantı - eski sistem)
+    // ✅ Room mantığı kaldırıldı - Room code ile bağlantı artık kullanılmıyor
+    // Bu fonksiyon geriye dönük uyumluluk için bırakıldı ama artık sadece connect() kullanılmalı
+    @Deprecated("Room mantığı kaldırıldı, connect() kullanın")
     suspend fun connect(roomCode: String) {
-        if (_status.value is SignalingStatus.Connected && roomCode == activeRoom) return
-        close()
-        _status.value = SignalingStatus.Connecting(roomCode)
-        val request = Request.Builder()
-            .url("$url?room=$roomCode")
-            .build()
-        val deferred = CompletableDeferred<Unit>()
-        pendingOpen = deferred
-        webSocket = okHttpClient.newWebSocket(request, createListener(roomCode))
-        deferred.await()
+        // Room code yok sayılıyor, sadece normal bağlantı yapılıyor
+        connect()
     }
 
     // Kullanıcı kaydı (OTP doğrulama kaldırıldı)
@@ -455,15 +449,9 @@ class SignalingClient(
                 android.util.Log.d("SignalingClient", "✅ WebSocket bağlantısı başarılı: roomCode=$roomCode, responseCode=${response.code}")
                 this@SignalingClient.webSocket = webSocket
                 
-                if (roomCode != null) {
-                    activeRoom = roomCode
-                    _status.value = SignalingStatus.Connected(roomCode)
-                    send(SignalingMessage.Join(roomCode))
-                    android.util.Log.d("SignalingClient", "Join mesajı gönderildi: roomCode=$roomCode")
-                } else {
-                    _status.value = SignalingStatus.Connected("")
-                    android.util.Log.d("SignalingClient", "WebSocket bağlantısı kuruldu (room code yok)")
-                }
+                // ✅ Room mantığı kaldırıldı - Join mesajı gönderilmiyor
+                _status.value = SignalingStatus.Connected("")
+                android.util.Log.d("SignalingClient", "WebSocket bağlantısı kuruldu")
                 pendingOpen?.complete(Unit)
                 pendingOpen = null
             }

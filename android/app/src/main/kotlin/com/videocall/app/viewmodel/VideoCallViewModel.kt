@@ -245,7 +245,7 @@ class VideoCallViewModel(
         val incomingCall = IncomingCall(
             callerPhoneNumber = message.callerPhoneNumber,
             callerName = contactName, // Bulunan kişi adını kullan
-            roomCode = message.roomCode,
+            roomCode = null, // ✅ Room mantığı kaldırıldı
             groupId = message.groupId,
             isGroupCall = message.isGroupCall,
             groupName = message.groupName
@@ -257,7 +257,7 @@ class VideoCallViewModel(
         notificationManager.showIncomingCallNotification(
             callerName = displayName,
             callerPhoneNumber = message.callerPhoneNumber,
-            roomCode = message.roomCode
+            roomCode = message.roomCode ?: "" // ✅ Room mantığı kaldırıldı - boş string kullan
         )
         
         // Çağrı sesini çal
@@ -323,7 +323,7 @@ class VideoCallViewModel(
     data class IncomingCall(
         val callerPhoneNumber: String,
         val callerName: String?,
-        val roomCode: String,
+        val roomCode: String? = null, // ✅ Room mantığı kaldırıldı - opsiyonel
         val groupId: String,
         val isGroupCall: Boolean = false,
         val groupName: String? = null
@@ -780,13 +780,36 @@ class VideoCallViewModel(
             val normalizedCaller = PhoneNumberUtils.toBackendFormat(myPhoneNumber)
             
             android.util.Log.d("VideoCallViewModel", "Arama başlatılıyor: target=$normalizedTarget (original: ${contact.phoneNumber}), caller=$normalizedCaller (original: $myPhoneNumber), audioOnly=$audioOnly")
+            
+            // ✅ WebSocket bağlantısının hazır olduğundan emin ol
             try {
+                val currentStatus = signalingClient.status.value
+                if (currentStatus !is SignalingStatus.Connected) {
+                    android.util.Log.d("VideoCallViewModel", "WebSocket bağlantısı yok, bağlanılıyor...")
+                    signalingClient.connect()
+                    
+                    // Bağlantının kurulmasını bekle
+                    var waitCount = 0
+                    while (signalingClient.status.value !is SignalingStatus.Connected && waitCount < 50) {
+                        delay(100)
+                        waitCount++
+                        kotlinx.coroutines.yield()
+                    }
+                    
+                    if (signalingClient.status.value !is SignalingStatus.Connected) {
+                        android.util.Log.e("VideoCallViewModel", "WebSocket bağlantısı kurulamadı")
+                        _uiState.update { it.copy(statusMessage = "Sunucuya bağlanılamadı") }
+                        return@launch
+                    }
+                }
+                
+                // Arama mesajını gönder
                 signalingClient.startCall(
                     targetPhoneNumber = normalizedTarget,
                     callerPhoneNumber = normalizedCaller,
                     callerName = myName
                 )
-                android.util.Log.d("VideoCallViewModel", "Arama mesajı gönderildi")
+                android.util.Log.d("VideoCallViewModel", "✅ Arama mesajı gönderildi: target=$normalizedTarget")
             } catch (e: Exception) {
                 android.util.Log.e("VideoCallViewModel", "Arama başlatma hatası", e)
                 _uiState.update { it.copy(statusMessage = "Arama başlatılamadı: ${e.message}") }
@@ -999,7 +1022,7 @@ class VideoCallViewModel(
         contactName: String?,
         phoneNumber: String,
         callType: CallType,
-        roomCode: String
+        roomCode: String? = null // ✅ Room mantığı kaldırıldı - opsiyonel
     ) {
         // Gizli mod aktifse görüşme geçmişine kaydetme
         if (preferencesManager.isPrivacyModeEnabled()) {
@@ -1012,7 +1035,7 @@ class VideoCallViewModel(
             phoneNumber = phoneNumber,
             callType = callType,
             timestamp = System.currentTimeMillis(),
-            roomCode = roomCode
+            roomCode = roomCode ?: "" // ✅ Room mantığı kaldırıldı - null ise boş string
         )
         val currentList = _callHistory.value.toMutableList()
         currentList.add(history)
@@ -1092,15 +1115,15 @@ class VideoCallViewModel(
         signalingMode = SignalingMode.CLOUD
         directChannel = DirectChannel.NONE
         
-        val room = _uiState.value.roomCode.ifBlank { generateRoomCode() }
-        activeRoom = room
+        // ✅ Room mantığı kaldırıldı - startCall() eski sistem için, artık kullanılmıyor
+        // Bu fonksiyon yerine startCallWithContact() kullanılmalı
         viewModelScope.launch {
             runCatching {
                 val isAudioOnly = _uiState.value.isAudioOnly
-                _uiState.update { it.copy(statusMessage = "Arama başlatılıyor...", roomCode = room) }
+                _uiState.update { it.copy(statusMessage = "Arama başlatılıyor...") }
                 
-                // Cloud signaling ile bağlan
-                signalingClient.connect(room)
+                // Cloud signaling ile bağlan (room code yok)
+                signalingClient.connect()
                 val offer = directCallClient.createOffer(audioOnly = isAudioOnly)
                 sendOffer(offer)
                 _uiState.update { it.copy(statusMessage = "Teklif gönderildi, yanıt bekleniyor...") }
@@ -1131,17 +1154,12 @@ class VideoCallViewModel(
             voiceCommandManager.startListening()
         }
 
-        // Cloud signaling ile bağlan
-        val room = _uiState.value.roomCode
-        if (room.isBlank()) {
-            _uiState.update { it.copy(statusMessage = "Katılmak için oda kodu girin") }
-            return
-        }
-        activeRoom = room
+        // ✅ Room mantığı kaldırıldı - joinCall() eski sistem için, artık kullanılmıyor
+        // Bu fonksiyon yerine direkt arama yapılmalı
         viewModelScope.launch {
             runCatching {
-                _uiState.update { it.copy(statusMessage = "Odaya bağlanılıyor...") }
-                signalingClient.connect(room)
+                _uiState.update { it.copy(statusMessage = "Bağlanılıyor...") }
+                signalingClient.connect()
                 _uiState.update { it.copy(statusMessage = "Bağlandı, SDP bekleniyor...") }
             }.onFailure { error ->
                 _uiState.update { it.copy(statusMessage = error.message ?: "Bağlantı kurulamadı") }
@@ -1802,9 +1820,13 @@ class VideoCallViewModel(
         currentStories.add(story)
         _stories.value = currentStories
         
-        // Room'a katıl
+        // ✅ Room mantığı kaldırıldı - Live yayın için de room code kullanılmıyor
+        // WebSocket bağlantısı zaten kurulu, live yayın için özel bağlantı gerekmiyor
         viewModelScope.launch {
-            signalingClient.connect(message.roomCode)
+            // WebSocket bağlantısının hazır olduğundan emin ol
+            if (signalingClient.status.value !is SignalingStatus.Connected) {
+                signalingClient.connect()
+            }
         }
         
         android.util.Log.d("VideoCallViewModel", "✅ Canlı yayın başlatıldı: ${message.liveId}")
@@ -1813,14 +1835,17 @@ class VideoCallViewModel(
     private fun handleIncomingLiveJoined(message: SignalingMessage.LiveJoined) {
         _uiState.update { 
             it.copy(
-                statusMessage = "Canlı yayına katıldınız",
-                roomCode = message.roomCode
+                statusMessage = "Canlı yayına katıldınız"
             )
         }
         
-        // Room'a katıl
+        // ✅ Room mantığı kaldırıldı - Live yayın için de room code kullanılmıyor
+        // WebSocket bağlantısı zaten kurulu, live yayın için özel bağlantı gerekmiyor
         viewModelScope.launch {
-            signalingClient.connect(message.roomCode)
+            // WebSocket bağlantısının hazır olduğundan emin ol
+            if (signalingClient.status.value !is SignalingStatus.Connected) {
+                signalingClient.connect()
+            }
         }
         
         android.util.Log.d("VideoCallViewModel", "✅ Canlı yayına katıldınız: ${message.liveId}")
@@ -2896,19 +2921,29 @@ class VideoCallViewModel(
         }
         when (message) {
             is SignalingMessage.Offer -> {
-                // acceptIncomingCall() çağrıldıktan sonra gelen offer'lar için de işle
-                val currentActiveRoom = activeRoom // Local copy to avoid smart cast issue
-                if (_incomingCall.value == null && currentActiveRoom != null && currentActiveRoom.isNotBlank()) {
-                    // Arama kabul edilmiş, offer'ı işle ve answer gönder
-                    android.util.Log.d("VideoCallViewModel", "Arama kabul edilmiş, gelen offer işleniyor: roomCode=$currentActiveRoom")
-                    handleRemoteOffer(message.sdp)
-                } else {
-                    // Yeni incoming call için
+                // ✅ Room mantığı kaldırıldı - Offer mesajı geldiğinde direkt işle
+                val hasIncomingCall = _incomingCall.value != null
+                
+                if (hasIncomingCall) {
+                    // Yeni incoming call için (henüz kabul edilmemiş)
+                    android.util.Log.d("VideoCallViewModel", "📞 Yeni incoming call offer'ı: caller=${_incomingCall.value?.callerPhoneNumber}")
                     handleIncomingOffer(source, message)
+                } else {
+                    // Arama kabul edilmiş, offer'ı işle ve answer gönder
+                    android.util.Log.d("VideoCallViewModel", "✅ Arama kabul edilmiş, gelen offer işleniyor")
+                    handleRemoteOffer(message.sdp)
                 }
             }
             is SignalingMessage.Answer -> {
+                android.util.Log.d("VideoCallViewModel", "📥 Answer mesajı alındı, remote description set ediliyor...")
                 directCallClient.setRemoteDescription(message.sdp, isOffer = false)
+                android.util.Log.d("VideoCallViewModel", "✅ Answer işlendi, görüşme başlatılıyor...")
+                _uiState.update { 
+                    it.copy(
+                        statusMessage = "Görüşme başlatıldı",
+                        isConnected = true
+                    ) 
+                }
             }
             is SignalingMessage.IceCandidateMessage -> {
                 val candidate = message.payload.toDirectCallIceCandidate()
@@ -2980,7 +3015,7 @@ class VideoCallViewModel(
                 handleIncomingCall(message)
             }
             is SignalingMessage.CallRequestSent -> {
-                android.util.Log.d("VideoCallViewModel", "Arama isteği gönderildi: groupId=${message.groupId}, roomCode=${message.roomCode}, targetPhoneNumber=${message.targetPhoneNumber}")
+                android.util.Log.d("VideoCallViewModel", "Arama isteği gönderildi: groupId=${message.groupId}, targetPhoneNumber=${message.targetPhoneNumber}")
                 // Outgoing call screen göster
                 val targetPhoneNumber = message.targetPhoneNumber
                 if (targetPhoneNumber != null) {
@@ -2997,12 +3032,11 @@ class VideoCallViewModel(
                     _outgoingCall.value = OutgoingCall(
                         contactName = contact?.name,
                         phoneNumber = targetPhoneNumber,
-                        roomCode = message.roomCode
+                        roomCode = null // ✅ Room mantığı kaldırıldı
                     )
                 }
                 _uiState.update { 
                     it.copy(
-                        roomCode = message.roomCode ?: "",
                         statusMessage = "Arama başlatıldı, yanıt bekleniyor..."
                     ) 
                 }
@@ -3028,39 +3062,38 @@ class VideoCallViewModel(
                 stopRingbackTone()
                 // Arama kabul edildi, outgoing call screen'i kapat
                 _outgoingCall.value = null
-                // Arama kabul edildi, room'a bağlan
-                activeRoom = message.roomCode
+                // ✅ Room mantığı kaldırıldı - Direkt WebRTC bağlantısı kuruluyor
                 _uiState.update { 
                     it.copy(
-                        roomCode = message.roomCode,
                         statusMessage = "Arama kabul edildi, bağlanılıyor..."
                     ) 
                 }
-                // Room'a bağlan ve offer gönder
+                // WebSocket bağlantısının hazır olduğundan emin ol ve offer gönder
                 viewModelScope.launch {
                     try {
-                        android.util.Log.d("VideoCallViewModel", "CallAccepted: Room'a bağlanılıyor: ${message.roomCode}")
-                        signalingClient.connect(message.roomCode)
-                        
-                        // Room bağlantısının kurulmasını bekle (timing sorunu için)
-                        var waitCount = 0
+                        // WebSocket bağlantısını kontrol et
                         val currentStatus = signalingClient.status.value
                         if (currentStatus !is SignalingStatus.Connected) {
+                            android.util.Log.d("VideoCallViewModel", "CallAccepted: WebSocket bağlantısı yok, bağlanılıyor...")
+                            signalingClient.connect()
+                            
+                            // Bağlantının kurulmasını bekle
+                            var waitCount = 0
                             while (signalingClient.status.value !is SignalingStatus.Connected && waitCount < 50) {
                                 delay(100)
                                 waitCount++
                                 kotlinx.coroutines.yield()
                             }
-                        }
-                        
-                        if (signalingClient.status.value !is SignalingStatus.Connected) {
-                            android.util.Log.e("VideoCallViewModel", "CallAccepted: Room bağlantısı kurulamadı")
-                            _uiState.update { 
-                                it.copy(
-                                    statusMessage = "Bağlantı kurulamadı"
-                                ) 
+                            
+                            if (signalingClient.status.value !is SignalingStatus.Connected) {
+                                android.util.Log.e("VideoCallViewModel", "CallAccepted: WebSocket bağlantısı kurulamadı")
+                                _uiState.update { 
+                                    it.copy(
+                                        statusMessage = "Bağlantı kurulamadı"
+                                    ) 
+                                }
+                                return@launch
                             }
-                            return@launch
                         }
                         
                         // Kısa bir gecikme ekle (timing sorunu için)
@@ -3087,40 +3120,39 @@ class VideoCallViewModel(
                 }
             }
             is SignalingMessage.CallAcceptedBy -> {
-                // Başka biri aramayı kabul etti - room'a bağlan ve offer gönder
-                android.util.Log.d("VideoCallViewModel", "Aramayı kabul eden: ${message.name ?: message.phoneNumber}, roomCode=${message.roomCode}")
-                activeRoom = message.roomCode
+                // ✅ Room mantığı kaldırıldı - Başka biri aramayı kabul etti
+                android.util.Log.d("VideoCallViewModel", "Aramayı kabul eden: ${message.name ?: message.phoneNumber}")
                 _uiState.update { 
                     it.copy(
-                        roomCode = message.roomCode,
                         statusMessage = "${message.name ?: message.phoneNumber} aramayı kabul etti, bağlanılıyor..."
                     ) 
                 }
-                // Room'a bağlan ve offer gönder
+                // WebSocket bağlantısının hazır olduğundan emin ol ve offer gönder
                 viewModelScope.launch {
                     try {
-                        android.util.Log.d("VideoCallViewModel", "CallAcceptedBy: Room'a bağlanılıyor: ${message.roomCode}")
-                        signalingClient.connect(message.roomCode)
-                        
-                        // Room bağlantısının kurulmasını bekle (timing sorunu için)
-                        var waitCount = 0
+                        // WebSocket bağlantısını kontrol et
                         val currentStatus = signalingClient.status.value
                         if (currentStatus !is SignalingStatus.Connected) {
+                            android.util.Log.d("VideoCallViewModel", "CallAcceptedBy: WebSocket bağlantısı yok, bağlanılıyor...")
+                            signalingClient.connect()
+                            
+                            // Bağlantının kurulmasını bekle
+                            var waitCount = 0
                             while (signalingClient.status.value !is SignalingStatus.Connected && waitCount < 50) {
                                 delay(100)
                                 waitCount++
                                 kotlinx.coroutines.yield()
                             }
-                        }
-                        
-                        if (signalingClient.status.value !is SignalingStatus.Connected) {
-                            android.util.Log.e("VideoCallViewModel", "CallAcceptedBy: Room bağlantısı kurulamadı")
-                            _uiState.update { 
-                                it.copy(
-                                    statusMessage = "Bağlantı kurulamadı"
-                                ) 
+                            
+                            if (signalingClient.status.value !is SignalingStatus.Connected) {
+                                android.util.Log.e("VideoCallViewModel", "CallAcceptedBy: WebSocket bağlantısı kurulamadı")
+                                _uiState.update { 
+                                    it.copy(
+                                        statusMessage = "Bağlantı kurulamadı"
+                                    ) 
+                                }
+                                return@launch
                             }
-                            return@launch
                         }
                         
                         // Kısa bir gecikme ekle (timing sorunu için)
@@ -3341,40 +3373,38 @@ class VideoCallViewModel(
             ) 
         }
         
-        // Room'a bağlan ve WebRTC bağlantısını kur
-        activeRoom = call.roomCode
+        // ✅ Room mantığı kaldırıldı - Direkt WebRTC bağlantısı kuruluyor
         _uiState.update { 
             it.copy(
-                roomCode = call.roomCode, 
                 statusMessage = "Arama kabul edildi, bağlanılıyor..."
             ) 
         }
         
         viewModelScope.launch {
             try {
-                // Room'a bağlan
-                android.util.Log.d("VideoCallViewModel", "Room'a bağlanılıyor: ${call.roomCode}")
-                signalingClient.connect(call.roomCode)
-                
-                // Room bağlantısının kurulmasını bekle (timing sorunu için)
-                var waitCount = 0
+                // WebSocket bağlantısının hazır olduğundan emin ol
                 val currentStatus = signalingClient.status.value
                 if (currentStatus !is SignalingStatus.Connected) {
+                    android.util.Log.d("VideoCallViewModel", "WebSocket bağlantısı yok, bağlanılıyor...")
+                    signalingClient.connect()
+                    
+                    // Bağlantının kurulmasını bekle
+                    var waitCount = 0
                     while (signalingClient.status.value !is SignalingStatus.Connected && waitCount < 50) {
                         delay(100)
                         waitCount++
                         kotlinx.coroutines.yield()
                     }
-                }
-                
-                if (signalingClient.status.value !is SignalingStatus.Connected) {
-                    android.util.Log.e("VideoCallViewModel", "Room bağlantısı kurulamadı")
-                    _uiState.update { 
-                        it.copy(
-                            statusMessage = "Bağlantı kurulamadı"
-                        ) 
+                    
+                    if (signalingClient.status.value !is SignalingStatus.Connected) {
+                        android.util.Log.e("VideoCallViewModel", "WebSocket bağlantısı kurulamadı")
+                        _uiState.update { 
+                            it.copy(
+                                statusMessage = "Bağlantı kurulamadı"
+                            ) 
+                        }
+                        return@launch
                     }
-                    return@launch
                 }
                 
                 // Kısa bir gecikme ekle (timing sorunu için)
@@ -3468,8 +3498,15 @@ class VideoCallViewModel(
                 }
                 
                 val answer = directCallClient.createAnswer(sdp, audioOnly = isAudioOnly)
+                android.util.Log.d("VideoCallViewModel", "✅ Answer oluşturuldu, gönderiliyor...")
                 sendAnswer(answer)
-                _uiState.update { it.copy(statusMessage = "Karşı tarafla eşleştirildi") }
+                android.util.Log.d("VideoCallViewModel", "✅ Answer gönderildi, görüşme başlatılıyor...")
+                _uiState.update { 
+                    it.copy(
+                        statusMessage = "Görüşme başlatıldı",
+                        isConnected = true
+                    ) 
+                }
             }.onFailure { error ->
                 android.util.Log.e("VideoCallViewModel", "handleRemoteOffer hatası", error)
                 _uiState.update { it.copy(statusMessage = error.message ?: "Yanıt gönderilemedi") }

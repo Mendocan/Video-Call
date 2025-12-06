@@ -284,7 +284,7 @@ sealed interface SignalingMessage {
 
     data class IncomingCall(
         val groupId: String,
-        val roomCode: String,
+        val roomCode: String? = null, // ✅ Room mantığı kaldırıldı - opsiyonel
         val callerPhoneNumber: String,
         val callerName: String?,
         val isGroupCall: Boolean,
@@ -305,7 +305,7 @@ sealed interface SignalingMessage {
 
     data class CallAccepted(
         val groupId: String,
-        val roomCode: String,
+        val roomCode: String? = null, // ✅ Room mantığı kaldırıldı - opsiyonel
         val timestamp: String
     ) : SignalingMessage {
         override val type: String = "call-accepted"
@@ -320,7 +320,7 @@ sealed interface SignalingMessage {
 
     data class CallAcceptedBy(
         val groupId: String,
-        val roomCode: String,
+        val roomCode: String? = null, // ✅ Room mantığı kaldırıldı - opsiyonel
         val phoneNumber: String,
         val name: String?,
         val timestamp: String
@@ -741,7 +741,7 @@ sealed interface SignalingMessage {
                 "incoming-call" -> {
                     IncomingCall(
                         groupId = json.getString("groupId"),
-                        roomCode = json.getString("roomCode"),
+                        roomCode = json.optString("roomCode").takeIf { it.isNotEmpty() }, // ✅ Room mantığı kaldırıldı - opsiyonel
                         callerPhoneNumber = json.getString("callerPhoneNumber"),
                         callerName = json.optString("callerName").takeIf { it.isNotEmpty() },
                         isGroupCall = json.getBoolean("isGroupCall"),
@@ -753,7 +753,7 @@ sealed interface SignalingMessage {
                 "call-accepted" -> {
                     CallAccepted(
                         groupId = json.getString("groupId"),
-                        roomCode = json.getString("roomCode"),
+                        roomCode = json.optString("roomCode").takeIf { it.isNotEmpty() }, // ✅ Room mantığı kaldırıldı - opsiyonel
                         timestamp = json.getString("timestamp")
                     )
                 }
@@ -772,7 +772,7 @@ sealed interface SignalingMessage {
                 "call-accepted-by" -> {
                     CallAcceptedBy(
                         groupId = json.getString("groupId"),
-                        roomCode = json.getString("roomCode"),
+                        roomCode = json.optString("roomCode").takeIf { it.isNotEmpty() }, // ✅ Room mantığı kaldırıldı - opsiyonel
                         phoneNumber = json.getString("phoneNumber"),
                         name = json.optString("name").takeIf { it.isNotEmpty() },
                         timestamp = json.getString("timestamp")

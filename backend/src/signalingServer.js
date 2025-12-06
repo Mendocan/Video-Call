@@ -364,14 +364,15 @@ wss.on('connection', (ws, req) => {
   console.log(`[Signaling] Yeni WebSocket bağlantısı: IP=${clientIP}`);
 
   // Connection bilgilerini kaydet (henüz kayıt olmamış)
+  // ✅ Room mantığı kaldırıldı - roomCode yerine currentCallGroupId kullanılıyor
   const connectionInfo = {
-    roomCode: null,
     phoneNumber: null,
     participantId: null,
     name: null,
     connectedAt: new Date(),
     isRegistered: false,
     clientIP: clientIP, // IP adresini kaydet
+    currentCallGroupId: null, // Aktif görüşme grup ID'si (room code yerine)
     ws
   };
   connections.set(ws, connectionInfo);
@@ -449,46 +450,41 @@ function handleMessage(ws, message) {
     return;
   }
 
-  // Room code gerektiren mesajlar için kontrol
-  const roomCode = connectionInfo.roomCode;
-  if (roomCode) {
-    const room = rooms.get(roomCode);
-    if (!room) {
-      ws.send(JSON.stringify({ type: 'error', message: 'Room not found' }));
-      return;
-    }
-  }
+  // ✅ Room mantığı kaldırıldı - Room code kontrolü yok
+  // Mesajlar direkt telefon numarası eşleştirmesi ile gönderilecek
 
   switch (message.type) {
     case 'offer':
-      // Offer'ı aynı odadaki diğer TÜM bağlantılara gönder (grup görüşme desteği)
-      // Her katılımcı kendi peer connection'ını yönetir
-      if (roomCode) {
-        console.log(`[Signaling] Offer alındı: roomCode=${roomCode}, sender=${connectionInfo?.phoneNumber || 'unknown'}`);
-        broadcastToRoom(roomCode, ws, message);
-        console.log(`[Signaling] Offer broadcast edildi: roomCode=${roomCode}`);
-      } else {
-        console.warn(`[Signaling] Offer alındı ama roomCode yok: sender=${connectionInfo?.phoneNumber || 'unknown'}`);
-      }
+      // ✅ Room mantığı kaldırıldı - Offer direkt hedef kullanıcıya gönderiliyor
+      handleDirectOffer(ws, message).catch(err => {
+        console.error(`[Signaling] Direct offer hatası:`, err);
+        ws.send(JSON.stringify({ 
+          type: 'error', 
+          message: 'Failed to send offer' 
+        }));
+      });
       break;
 
     case 'answer':
-      // Answer'ı aynı odadaki diğer TÜM bağlantılara gönder
-      if (roomCode) {
-        console.log(`[Signaling] Answer alındı: roomCode=${roomCode}, sender=${connectionInfo?.phoneNumber || 'unknown'}`);
-        broadcastToRoom(roomCode, ws, message);
-        console.log(`[Signaling] Answer broadcast edildi: roomCode=${roomCode}`);
-      } else {
-        console.warn(`[Signaling] Answer alındı ama roomCode yok: sender=${connectionInfo?.phoneNumber || 'unknown'}`);
-      }
+      // ✅ Room mantığı kaldırıldı - Answer direkt hedef kullanıcıya gönderiliyor
+      handleDirectAnswer(ws, message).catch(err => {
+        console.error(`[Signaling] Direct answer hatası:`, err);
+        ws.send(JSON.stringify({ 
+          type: 'error', 
+          message: 'Failed to send answer' 
+        }));
+      });
       break;
 
     case 'ice-candidate':
-      // ICE candidate'ı aynı odadaki diğer TÜM bağlantılara gönder
-      // WebRTC otomatik olarak en iyi bağlantı yolunu seçer (Wi-Fi veya mobil veri)
-      if (roomCode) {
-        broadcastToRoom(roomCode, ws, message);
-      }
+      // ✅ Room mantığı kaldırıldı - ICE candidate direkt hedef kullanıcıya gönderiliyor
+      handleDirectIceCandidate(ws, message).catch(err => {
+        console.error(`[Signaling] Direct ICE candidate hatası:`, err);
+        ws.send(JSON.stringify({ 
+          type: 'error', 
+          message: 'Failed to send ICE candidate' 
+        }));
+      });
       break;
 
     case 'chat':
@@ -532,34 +528,56 @@ function handleMessage(ws, message) {
       break;
 
     case 'get-participants':
-      // Odadaki tüm katılımcıları listele
-      if (roomCode) {
-        const allParticipants = participants.get(roomCode) || [];
+      // ✅ Room mantığı kaldırıldı - Aktif görüşmedeki katılımcıları listele
+      const groupId = connectionInfo.currentCallGroupId;
+      if (groupId) {
+        const groupInfo = groups.get(groupId);
+        if (groupInfo) {
+          const participantsList = groupInfo.members.map(phoneNumber => {
+            const userInfo = userRegistry.get(phoneNumber);
+            return {
+              phoneNumber: phoneNumber,
+              name: userInfo?.name || null,
+              isOnline: userInfo ? (userInfo.ws.readyState === 1) : false
+            };
+          });
+          ws.send(JSON.stringify({
+            type: 'participants-list',
+            participants: participantsList,
+            count: participantsList.length
+          }));
+        }
+      } else {
         ws.send(JSON.stringify({
           type: 'participants-list',
-          participants: allParticipants,
-          count: allParticipants.length
+          participants: [],
+          count: 0
         }));
       }
       break;
 
     case 'leave':
-      // Kullanıcı odadan ayrılıyor
-      if (roomCode) {
-        const leavingConnection = connections.get(ws);
-        if (leavingConnection) {
-          // Participant listesinden kaldır
-          const roomParticipants = participants.get(roomCode) || [];
-          const filtered = roomParticipants.filter(p => p.participantId !== leavingConnection.participantId);
-          participants.set(roomCode, filtered);
-          
-          // Diğer kullanıcılara bildir
-          broadcastToRoom(roomCode, ws, {
-            type: 'participant-left',
-            participantId: leavingConnection.participantId,
-            participantCount: filtered.length
-          });
+      // ✅ Room mantığı kaldırıldı - Leave mesajı aktif görüşmeyi sonlandırır
+      const leavingConnection = connections.get(ws);
+      if (leavingConnection && leavingConnection.currentCallGroupId) {
+        const groupId = leavingConnection.currentCallGroupId;
+        const groupInfo = groups.get(groupId);
+        if (groupInfo) {
+          // Diğer kullanıcıya bildir
+          const otherPhone = groupInfo.members.find(m => m !== leavingConnection.phoneNumber);
+          if (otherPhone) {
+            const otherUser = userRegistry.get(otherPhone);
+            if (otherUser && otherUser.ws.readyState === 1) {
+              otherUser.ws.send(JSON.stringify({
+                type: 'call-ended',
+                groupId: groupId,
+                phoneNumber: leavingConnection.phoneNumber,
+                timestamp: new Date().toISOString()
+              }));
+            }
+          }
         }
+        leavingConnection.currentCallGroupId = null;
       }
       cleanupConnection(ws).catch(err => {
         console.error(`[Signaling] Cleanup hatası:`, err);
@@ -778,6 +796,169 @@ async function handleDirectChat(ws, message) {
 }
 
 // OTP fonksiyonları kaldırıldı - SMS doğrulama kullanılmıyor
+
+// ✅ Room mantığı kaldırıldı - Direkt telefon numarası eşleştirmesi için fonksiyonlar
+
+// Offer mesajını direkt hedef kullanıcıya gönder
+async function handleDirectOffer(ws, message) {
+  const connectionInfo = connections.get(ws);
+  if (!connectionInfo || !connectionInfo.isRegistered) {
+    ws.send(JSON.stringify({ 
+      type: 'error', 
+      message: 'Please register first' 
+    }));
+    return;
+  }
+
+  const senderPhone = connectionInfo.phoneNumber;
+  const groupId = connectionInfo.currentCallGroupId;
+  
+  if (!groupId) {
+    console.warn(`[Signaling] ⚠️ Offer alındı ama aktif grup yok: sender=${senderPhone}`);
+    ws.send(JSON.stringify({ 
+      type: 'error', 
+      message: 'No active call found' 
+    }));
+    return;
+  }
+
+  const groupInfo = groups.get(groupId);
+  if (!groupInfo) {
+    console.warn(`[Signaling] ⚠️ Offer alındı ama grup bulunamadı: groupId=${groupId}, sender=${senderPhone}`);
+    ws.send(JSON.stringify({ 
+      type: 'error', 
+      message: 'Group not found' 
+    }));
+    return;
+  }
+
+  // Grup üyelerinden gönderen hariç diğerine gönder
+  const targetPhone = groupInfo.members.find(m => m !== senderPhone);
+  if (!targetPhone) {
+    console.warn(`[Signaling] ⚠️ Offer alındı ama hedef kullanıcı bulunamadı: groupId=${groupId}, sender=${senderPhone}`);
+    return;
+  }
+
+  const targetUser = userRegistry.get(targetPhone);
+  if (!targetUser || targetUser.ws.readyState !== 1) {
+    console.warn(`[Signaling] ⚠️ Offer gönderilemedi: hedef kullanıcı offline: target=${targetPhone}, sender=${senderPhone}`);
+    ws.send(JSON.stringify({ 
+      type: 'error', 
+      message: 'Target user is offline' 
+    }));
+    return;
+  }
+
+  // Hedef kullanıcıya offer gönder
+  try {
+    targetUser.ws.send(JSON.stringify(message));
+    console.log(`[Signaling] ✅ Offer gönderildi: sender=${senderPhone} -> target=${targetPhone}`);
+  } catch (error) {
+    console.error(`[Signaling] ❌ Offer gönderme hatası:`, error);
+    throw error;
+  }
+}
+
+// Answer mesajını direkt hedef kullanıcıya gönder
+async function handleDirectAnswer(ws, message) {
+  const connectionInfo = connections.get(ws);
+  if (!connectionInfo || !connectionInfo.isRegistered) {
+    ws.send(JSON.stringify({ 
+      type: 'error', 
+      message: 'Please register first' 
+    }));
+    return;
+  }
+
+  const senderPhone = connectionInfo.phoneNumber;
+  const groupId = connectionInfo.currentCallGroupId;
+  
+  if (!groupId) {
+    console.warn(`[Signaling] ⚠️ Answer alındı ama aktif grup yok: sender=${senderPhone}`);
+    ws.send(JSON.stringify({ 
+      type: 'error', 
+      message: 'No active call found' 
+    }));
+    return;
+  }
+
+  const groupInfo = groups.get(groupId);
+  if (!groupInfo) {
+    console.warn(`[Signaling] ⚠️ Answer alındı ama grup bulunamadı: groupId=${groupId}, sender=${senderPhone}`);
+    ws.send(JSON.stringify({ 
+      type: 'error', 
+      message: 'Group not found' 
+    }));
+    return;
+  }
+
+  // Grup üyelerinden gönderen hariç diğerine gönder
+  const targetPhone = groupInfo.members.find(m => m !== senderPhone);
+  if (!targetPhone) {
+    console.warn(`[Signaling] ⚠️ Answer alındı ama hedef kullanıcı bulunamadı: groupId=${groupId}, sender=${senderPhone}`);
+    return;
+  }
+
+  const targetUser = userRegistry.get(targetPhone);
+  if (!targetUser || targetUser.ws.readyState !== 1) {
+    console.warn(`[Signaling] ⚠️ Answer gönderilemedi: hedef kullanıcı offline: target=${targetPhone}, sender=${senderPhone}`);
+    ws.send(JSON.stringify({ 
+      type: 'error', 
+      message: 'Target user is offline' 
+    }));
+    return;
+  }
+
+  // Hedef kullanıcıya answer gönder
+  try {
+    targetUser.ws.send(JSON.stringify(message));
+    console.log(`[Signaling] ✅ Answer gönderildi: sender=${senderPhone} -> target=${targetPhone}`);
+  } catch (error) {
+    console.error(`[Signaling] ❌ Answer gönderme hatası:`, error);
+    throw error;
+  }
+}
+
+// ICE candidate mesajını direkt hedef kullanıcıya gönder
+async function handleDirectIceCandidate(ws, message) {
+  const connectionInfo = connections.get(ws);
+  if (!connectionInfo || !connectionInfo.isRegistered) {
+    return; // ICE candidate için hata göndermeye gerek yok
+  }
+
+  const senderPhone = connectionInfo.phoneNumber;
+  const groupId = connectionInfo.currentCallGroupId;
+  
+  if (!groupId) {
+    console.warn(`[Signaling] ⚠️ ICE candidate alındı ama aktif grup yok: sender=${senderPhone}`);
+    return;
+  }
+
+  const groupInfo = groups.get(groupId);
+  if (!groupInfo) {
+    console.warn(`[Signaling] ⚠️ ICE candidate alındı ama grup bulunamadı: groupId=${groupId}, sender=${senderPhone}`);
+    return;
+  }
+
+  // Grup üyelerinden gönderen hariç diğerine gönder
+  const targetPhone = groupInfo.members.find(m => m !== senderPhone);
+  if (!targetPhone) {
+    return;
+  }
+
+  const targetUser = userRegistry.get(targetPhone);
+  if (!targetUser || targetUser.ws.readyState !== 1) {
+    return; // ICE candidate için hata göndermeye gerek yok
+  }
+
+  // Hedef kullanıcıya ICE candidate gönder
+  try {
+    targetUser.ws.send(JSON.stringify(message));
+    console.log(`[Signaling] ✅ ICE candidate gönderildi: sender=${senderPhone} -> target=${targetPhone}`);
+  } catch (error) {
+    console.error(`[Signaling] ❌ ICE candidate gönderme hatası:`, error);
+  }
+}
 
 // Telefon numarasını normalize et (backend formatı: 0 ile başlayan)
 function normalizePhoneNumber(phoneNumber) {
@@ -1239,7 +1420,7 @@ function handleJoinGroup(ws, message) {
     type: 'group-joined',
     groupId: groupId,
     groupName: groupInfo.name,
-    roomCode: groupInfo.roomCode,
+    // ✅ Room mantığı kaldırıldı - roomCode artık gönderilmiyor
     members: groupInfo.members,
     timestamp: new Date().toISOString()
   }));
@@ -1366,7 +1547,7 @@ function handleGetGroups(ws) {
     return {
       groupId: groupInfo.groupId,
       name: groupInfo.name,
-      roomCode: groupInfo.roomCode,
+      // ✅ Room mantığı kaldırıldı - roomCode artık gönderilmiyor
       memberCount: groupInfo.members.length,
       createdBy: groupInfo.createdBy,
       createdAt: groupInfo.createdAt.toISOString()
@@ -1423,7 +1604,7 @@ function handleGetGroupInfo(ws, message) {
     type: 'group-info',
     groupId: groupInfo.groupId,
     name: groupInfo.name,
-    roomCode: groupInfo.roomCode,
+    // ✅ Room mantığı kaldırıldı - roomCode artık gönderilmiyor
     members: membersInfo,
     memberCount: groupInfo.members.length,
     createdBy: groupInfo.createdBy,
@@ -1553,9 +1734,8 @@ async function handleCallRequest(ws, message) {
   
   console.log(`[Signaling] Hedef kullanıcı bulundu: ${normalizedTargetPhoneNumber} (original: ${targetPhoneNumber}), IP=${targetUser.clientIP}, WebSocket durumu: ${targetUser.ws.readyState}`);
 
-  // Bireysel görüşme için geçici grup oluştur (2 kişilik)
+  // Bireysel görüşme için geçici grup oluştur (2 kişilik) - Room mantığı kaldırıldı
   const tempGroupId = generateGroupId();
-  const roomCode = generateRoomCode();
   
   // ÖNEMLİ: members array'ine normalize edilmiş telefon numaralarını ekle
   // Aksi halde handleCallAccept'te userRegistry.get() eşleşmesi yapılamaz
@@ -1565,8 +1745,9 @@ async function handleCallRequest(ws, message) {
     members: [normalizedCallerPhone, normalizedTargetPhoneNumber], // Normalize edilmiş telefon numaraları
     createdBy: normalizedCallerPhone, // Normalize edilmiş telefon numarası
     createdAt: new Date(),
-    roomCode: roomCode,
-    isTemporary: true // Bireysel görüşme için geçici grup
+    isTemporary: true, // Bireysel görüşme için geçici grup
+    callerPhone: normalizedCallerPhone, // Arayan telefon numarası
+    targetPhone: normalizedTargetPhoneNumber // Aranan telefon numarası
   };
 
   groups.set(tempGroupId, tempGroupInfo);
@@ -1579,11 +1760,9 @@ async function handleCallRequest(ws, message) {
     userGroups.get(phoneNumber).add(tempGroupId);
   });
 
-  // Room oluştur
-  if (!rooms.has(roomCode)) {
-    rooms.set(roomCode, []);
-    participants.set(roomCode, []);
-  }
+  // ✅ Room mantığı kaldırıldı - Direkt telefon numarası eşleştirmesi kullanılıyor
+  // Connection'da sadece grup ID saklanıyor (room code yok)
+  connectionInfo.currentCallGroupId = tempGroupId;
 
   console.log(`[Signaling] Bireysel arama başlatıldı: caller=${normalizedCallerPhone} (original: ${callerPhone}), target=${normalizedTargetPhoneNumber} (original: ${targetPhoneNumber}), groupId=${tempGroupId}, callerName=${callerNameValue}`);
 
@@ -1596,7 +1775,6 @@ async function handleCallRequest(ws, message) {
     const incomingCallMessage = JSON.stringify({
       type: 'incoming-call',
       groupId: tempGroupId,
-      roomCode: roomCode,
       callerPhoneNumber: normalizedCallerPhone, // Normalize edilmiş telefon numarası
       callerName: finalCallerName, // Null olmayan isim
       isGroupCall: false,
@@ -1628,7 +1806,6 @@ async function handleCallRequest(ws, message) {
   ws.send(JSON.stringify({
     type: 'call-request-sent',
     groupId: tempGroupId,
-    roomCode: roomCode,
     targetPhoneNumber: normalizedTargetPhoneNumber, // Normalize edilmiş telefon numarası
     timestamp: new Date().toISOString()
   }));
@@ -1663,8 +1840,7 @@ function handleGroupCallRequest(ws, groupId, callerPhoneNumber, callerName) {
     return;
   }
 
-  const roomCode = groupInfo.roomCode;
-
+  // ✅ Room mantığı kaldırıldı - Grup araması için de room code yok
   console.log(`[Signaling] Grup araması başlatıldı: groupId=${groupId}, caller=${callerPhoneNumber}, members=${groupInfo.members.length}`);
 
   // Tüm grup üyelerine (arayan hariç) gelen arama bildirimi gönder
@@ -1676,7 +1852,6 @@ function handleGroupCallRequest(ws, groupId, callerPhoneNumber, callerName) {
         memberUser.ws.send(JSON.stringify({
           type: 'incoming-call',
           groupId: groupId,
-          roomCode: roomCode,
           callerPhoneNumber: callerPhoneNumber,
           callerName: callerName,
           isGroupCall: true,
@@ -1693,7 +1868,6 @@ function handleGroupCallRequest(ws, groupId, callerPhoneNumber, callerName) {
   ws.send(JSON.stringify({
     type: 'call-request-sent',
     groupId: groupId,
-    roomCode: roomCode,
     notifiedCount: notifiedCount,
     totalMembers: groupInfo.members.length - 1, // Arayan hariç
     timestamp: new Date().toISOString()
@@ -1730,69 +1904,44 @@ function handleCallAccept(ws, message) {
   }
 
   const phoneNumber = connectionInfo.phoneNumber;
-  const roomCode = groupInfo.roomCode;
 
-  // Room'a bağlan
-  connectionInfo.roomCode = roomCode;
-  
-  if (!rooms.has(roomCode)) {
-    rooms.set(roomCode, []);
-    participants.set(roomCode, []);
-  }
-  rooms.get(roomCode).push(ws);
+  // ✅ Room mantığı kaldırıldı - Sadece grup ID saklanıyor
+  connectionInfo.currentCallGroupId = groupId;
 
-  // Participant listesine ekle
-  const roomParticipants = participants.get(roomCode) || [];
-  const participantData = {
-    participantId: connectionInfo.participantId,
-    phoneNumber: phoneNumber,
-    name: connectionInfo.name,
-    joinedAt: connectionInfo.connectedAt.toISOString()
-  };
-  roomParticipants.push(participantData);
-  participants.set(roomCode, roomParticipants);
-
-  console.log(`[Signaling] Arama kabul edildi: phoneNumber=${phoneNumber}, groupId=${groupId}, roomCode=${roomCode}`);
+  console.log(`[Signaling] Arama kabul edildi: phoneNumber=${phoneNumber}, groupId=${groupId}`);
 
   // Kabul eden kullanıcıya onay mesajı gönder
   ws.send(JSON.stringify({
     type: 'call-accepted',
     groupId: groupId,
-    roomCode: roomCode,
     timestamp: new Date().toISOString()
   }));
 
-  // Diğer grup üyelerine bildir
+  // Diğer grup üyelerine bildir (arayan taraf)
   // ÖNEMLİ: groupInfo.members artık normalize edilmiş telefon numaraları içeriyor
   groupInfo.members.forEach(memberPhone => {
     // memberPhone zaten normalize edilmiş (0 ile başlayan format)
     if (memberPhone !== phoneNumber) {
       const memberUser = userRegistry.get(memberPhone);
       if (memberUser && memberUser.ws.readyState === 1) {
+        // ✅ Room mantığı kaldırıldı - Sadece grup ID saklanıyor
+        const callerConnectionInfo = connections.get(memberUser.ws);
+        if (callerConnectionInfo) {
+          callerConnectionInfo.currentCallGroupId = groupId;
+        }
+        
         // name için fallback: connectionInfo.name veya phoneNumber
         const memberName = connectionInfo.name || phoneNumber;
         console.log(`[Signaling] call-accepted-by gönderiliyor: memberPhone=${memberPhone}, phoneNumber=${phoneNumber}, name=${memberName}`);
         memberUser.ws.send(JSON.stringify({
           type: 'call-accepted-by',
           groupId: groupId,
-          roomCode: roomCode,
           phoneNumber: phoneNumber,
           name: memberName,
           timestamp: new Date().toISOString()
         }));
         
-        // WebRTC bağlantısını başlatmak için room'daki diğer kullanıcılara bildir
-        // Her iki taraf da offer gönderebilir, ilk gelen offer'a answer gönderilir
-        console.log(`[Signaling] WebRTC bağlantısı başlatılıyor: roomCode=${roomCode}, members=${groupInfo.members.join(', ')}`);
-        
-        // Room'daki tüm kullanıcıların bağlı olduğundan emin ol
-        const roomConnections = rooms.get(roomCode) || [];
-        console.log(`[Signaling] Room bağlantıları: ${roomConnections.length} adet`);
-        
-        // Room'daki her kullanıcıya WebRTC başlatma mesajı gönder (opsiyonel)
-        // Aslında offer/answer exchange otomatik olarak başlayacak
-        // Bu sadece log için
-        console.log(`[Signaling] ✅ WebRTC bağlantısı hazır: roomCode=${roomCode}, arayan=${memberPhone}, aranan=${phoneNumber}`);
+        console.log(`[Signaling] ✅ WebRTC bağlantısı hazır: arayan=${memberPhone}, aranan=${phoneNumber}`);
       } else {
         console.log(`[Signaling] call-accepted-by gönderilemedi: memberPhone=${memberPhone} bulunamadı veya offline (userRegistry.has=${userRegistry.has(memberPhone)}, readyState=${memberUser?.ws?.readyState})`);
       }
@@ -2148,7 +2297,6 @@ async function cleanupConnection(ws) {
   if (!connectionInfo) return;
 
   const phoneNumber = wsToPhoneNumber.get(ws);
-  const roomCode = connectionInfo.roomCode;
 
   // MongoDB'de isOnline=false yap (eğer phoneNumber varsa)
   if (phoneNumber) {
@@ -2167,6 +2315,28 @@ async function cleanupConnection(ws) {
     } catch (error) {
       console.error(`[Signaling] ⚠️ MongoDB cleanup hatası (devam ediliyor):`, error.message);
     }
+  }
+
+  // ✅ Room mantığı kaldırıldı - Aktif görüşme varsa sonlandır
+  if (connectionInfo.currentCallGroupId) {
+    const groupId = connectionInfo.currentCallGroupId;
+    const groupInfo = groups.get(groupId);
+    if (groupInfo) {
+      // Diğer kullanıcıya bildir (eğer varsa)
+      const otherPhone = groupInfo.members.find(m => m !== phoneNumber);
+      if (otherPhone) {
+        const otherUser = userRegistry.get(otherPhone);
+        if (otherUser && otherUser.ws.readyState === 1) {
+          otherUser.ws.send(JSON.stringify({
+            type: 'call-ended',
+            groupId: groupId,
+            phoneNumber: phoneNumber,
+            timestamp: new Date().toISOString()
+          }));
+        }
+      }
+    }
+    connectionInfo.currentCallGroupId = null;
   }
 
   // Kullanıcı kaydını temizle
